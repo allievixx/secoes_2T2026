@@ -1,0 +1,13 @@
+{
+  "name": "secoes-2t-2026",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "http-server . -p 8080 -c-1",
+    "start:bq": "python3 -m scripts.servir_dashboard",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "year": 2026,
+  "encoding": "cp1252",
+  "longDistanceEncoding": "utf-8-sig",
+  "bigquery": {
+    "project": "comite-tecnologia",
+    "dataset": "alteracao_locais_votacao",
+    "table": "secoes_alteradas_2t_2026",
+    "location": "US"
+  },
+  "sources": {
+    "changes": "https://cdn.tse.jus.br/estatistica/sead/odsele/arquivos_gerados/eleitorado_eleicao_2026/20261019_105000/71d5e6b06fa299337b05541127926cd7/secoes_eleitorais_alteradas_2t-pais_2026.csv.zip",
+    "registry": "https://cdn.tse.jus.br/estatistica/sead/odsele/eleitorado_locais_votacao/eleitorado_local_votacao_2026.zip",
+    "votes": "https://cdn.tse.jus.br/estatistica/sead/odsele/votacao_secao/votacao_secao_2026_BR.zip",
+    "details": "https://cdn.tse.jus.br/estatistica/sead/odsele/detalhe_votacao_secao/detalhe_votacao_secao_2026.zip",
+    "municipalities": "https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome",
+    "baseline": null,
+    "longDistance": null
+  },
+  "candidates": {"lula": "13", "flavio": "22"},
+  "ibgeOverrides": {
+    "GO:BOM JESUS": 5203500
+  }
+}
