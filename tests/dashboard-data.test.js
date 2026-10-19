@@ -7,22 +7,21 @@ const fixture = overrides => ({
   uf:"SP", municipio:"Cidade de teste", cd_ibge:"3550308", zona:"1", secao:"1", eleitores:"100",
   local_1t:"Escola antiga", endereco_1t:"Rua A; 10", lat_1t:"-23.55", lon_1t:"-46.63",
   local_2t:"Escola nova", endereco_2t:"Rua B", bairro_2t:"Centro", lat_2t:"-23.56", lon_2t:"-46.64",
-  distancia_km:"2,5", regiao_longe_da_urna:"True", entrou_desde_15_10:"False",
+  distancia_km:"2,5", regiao_longe_da_urna:"True",
   aptos_1t:"90", abstencao_1t:"10", lula_1t:"40", flavio_1t:"30", outros_1t:"5", brancos_1t:"2", nulos_1t:"3",
   ...overrides,
 });
 
 test("agrupa seções e calcula os totais a partir da fonte", () => {
-  const data=prepareDashboardData([fixture(),fixture({secao:"2",entrou_desde_15_10:"True"})],{gen:"hoje"});
+  const data=prepareDashboardData([fixture(),fixture({secao:"2"})],{gen:"hoje"});
   assert.equal(data.g.length,1);
   assert.equal(data.g[0].s.length,2);
-  assert.deepEqual(data.g[0].s[0],[1,100,90,10,40,30,5,2,3,false]);
+  assert.deepEqual(data.g[0].s[0],[1,100,90,10,40,30,5,2,3]);
   assert.equal(data.g[0].longe,true);
   assert.equal(data.g[0].km,2.5);
   assert.deepEqual(data.g[0].pf,[-23.56,-46.64]);
   assert.equal(data.meta.eleitores,200);
   assert.equal(data.meta.lula,80);
-  assert.equal(data.meta.novas,1);
   assert.equal(data.meta.municipios,1);
   assert.equal(data.meta.gen,"hoje");
 });
@@ -55,18 +54,18 @@ test("busca a fonte sem cache e converte as linhas retornadas pelo parser", asyn
   assert.equal(data.meta.secoes,1);
 });
 
-test("preserva indicadores desconhecidos em bases parciais", () => {
-  const data=prepareDashboardData([fixture({regiao_longe_da_urna:"",entrou_desde_15_10:""})]);
+test("preserva indicadores desconhecidos e ignora o campo removido", () => {
+  const data=prepareDashboardData([fixture({regiao_longe_da_urna:"",entrou_desde_15_10:"True"})]);
   assert.equal(data.g[0].longe,null);
-  assert.equal(data.g[0].s[0][9],null);
+  assert.equal(data.g[0].s[0].length,9);
 });
 
-test("carrega JSON de API com NULLs e números tipados do BigQuery", async t => {
+test("carrega JSON público com nulls e números tipados", async t => {
   t.mock.method(globalThis,"fetch",async()=>({ok:true,json:async()=>({rows:[fixture({eleitores:100,regiao_longe_da_urna:null,entrou_desde_15_10:null})]})}));
   const data=await loadDashboardData("/api/secoes",{},undefined,"json");
   assert.equal(data.meta.eleitores,100);
   assert.equal(data.g[0].longe,null);
-  assert.equal(data.g[0].s[0][9],null);
+  assert.equal(data.g[0].s[0].length,9);
 });
 
 test("informa falha HTTP e payload JSON inválido", async t => {
@@ -74,6 +73,22 @@ test("informa falha HTTP e payload JSON inválido", async t => {
   await assert.rejects(loadDashboardData("/api/secoes",{},undefined,"json"),/503/);
   mocked.mock.mockImplementation(async()=>({ok:true,json:async()=>({wrong:[]})}));
   await assert.rejects(loadDashboardData("/api/secoes",{},undefined,"json"),/rows/);
+});
+
+test("carrega e valida snapshots completos por data da extração", async t => {
+  t.mock.method(globalThis,"fetch",async()=>({ok:true,json:async()=>({
+    snapshots:[
+      {extracted_at:"2026-10-19T09:30:00Z",rows:[fixture({secao:"1"})]},
+      {extracted_at:"2026-10-20T09:30:00Z",rows:[fixture({secao:"2"})]},
+      {extracted_at:"2026-10-19T15:30:00Z",rows:[fixture({secao:"3"})]},
+    ],
+  })}));
+  const data=await loadDashboardData("/api/secoes",{},undefined,"json");
+  assert.equal(data.snapshots.length,3);
+  assert.deepEqual(data.snapshots.map(snapshot=>snapshot.extractedAt),[
+    "2026-10-19T09:30:00.000Z","2026-10-19T15:30:00.000Z","2026-10-20T09:30:00.000Z",
+  ]);
+  assert.equal(data.g[0].s[0][0],2);
 });
 
 test("informa indisponibilidade da biblioteca e falhas da fonte", async () => {

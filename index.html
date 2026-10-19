@@ -19,6 +19,7 @@
     <a href="#sec-mapa" data-sec="sec-mapa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 4 3 6.5v13.5l6-2.5 6 2.5 6-2.5V4l-6 2.5zM9 4v13.5M15 6.5V20"/></svg>Mapa</a>
     <a href="#sec-lista" data-sec="sec-lista"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg><span class="lg-only">Mudanças</span><span class="sm-only">Lista</span></a>
     <a href="#sec-uf" data-sec="sec-uf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/></svg><span class="lg-only">Por estado</span><span class="sm-only">UFs</span></a>
+    <a href="#sec-timeline" data-sec="sec-timeline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h18M3 6h18M3 18h18"/><circle cx="6" cy="12" r="1"/><circle cx="12" cy="6" r="1"/><circle cx="18" cy="18" r="1"/></svg><span class="lg-only">Linha do tempo</span><span class="sm-only">Timeline</span></a>
     <a href="#sec-sobre" data-sec="sec-sobre"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg><span class="lg-only">Como ler</span><span class="sm-only">Sobre</span></a>
   </nav>
 </div></header>
@@ -29,6 +30,8 @@
 </section>
 <noscript><p>Ative o JavaScript para carregar os dados e visualizar o dashboard.</p></noscript>
 <div class="wrap" id="dashboard" hidden aria-busy="true">
+  <div class="snapshot-tabs" id="snapshot-tabs" role="tablist" aria-label="Versões diárias do dashboard"></div>
+  <div class="snapshot-panel" id="snapshot-panel" role="tabpanel">
   <section class="card" id="top">
     <div><div class="eyebrow" id="scope"></div><h2 id="headline"></h2></div>
     <p class="lead" id="lede"></p><div class="kpis" id="kpis"></div>
@@ -46,7 +49,6 @@
   </div>
   <div class="chips" role="group" aria-label="Filtros">
     <span class="lbl">Mostrar só:</span>
-    <button type="button" class="chip" id="f-nv" aria-pressed="false" hidden>Entraram desde 15/10</button>
     <button type="button" class="chip" id="f-far" aria-pressed="false">Mudou 2 km ou mais</button>
     <button type="button" class="chip" id="f-longe" aria-pressed="false">Região longe da urna</button>
   </div>
@@ -70,12 +72,18 @@
     <div class="facts" style="font-size:.82rem">Segue os filtros da página, exceto o de estado. Toque num estado para filtrar a página por ele. Percentuais de Lula e Flávio sobre os votos válidos do 1º turno.</div>
     <div class="tblw"><table id="uftab"></table></div>
   </section>
+  <section class="card" id="sec-timeline">
+    <div><div class="eyebrow">Histórico de cargas</div><h2>Linha do tempo</h2></div>
+    <div class="facts" style="font-size:.82rem">Evolução dos dados ao longo das extrações. Compare como os dados mudaram entre as diferentes cargas do dia.</div>
+    <div id="timeline-charts"></div>
+  </section>
   <details id="sec-sobre">
     <summary>Como ler</summary>
     <p>Fonte: lista de seções eleitorais alteradas no 2º turno do TSE (<i>secoes_eleitorais_alteradas_2t-pais_2026</i>), publicada em <span id="gen"></span>, com <span id="source-sections"></span> seções. "Eleitores" é a coluna <i>qt_eleitores</i> dessa lista. Endereços e coordenadas vêm da base de locais de votação do TSE (<i>eleitorado_local_votacao_2026</i>, versão de <span id="registry-date"></span>). As bases podem apresentar totais de eleitores diferentes.</p>
     <p>Em notícia de 16/10, o TSE informou 4.352 seções alteradas entre o 1º e o 2º turno, com números por estado (SP 982, MG 514, RJ 431, BA 312) que não batem com o cadastro seção por seção.</p>
     <p>A distância é em linha reta entre o local original e o novo; quando o local original não tem mais nenhuma seção no cadastro, não há como medir. O tempo a pé usa 5 km/h. "Região longe da urna" usa o critério do mapa Longe da urna: quem mora em volta do local está, em média, a 5 km ou mais dele. Resultados do 1º turno (presidente) por seção: TSE, votação por seção e detalhe da votação por seção. "Aptos" é o número de aptos no 1º turno, do resultado por seção. Malha geográfica: IBGE.</p>
   </details>
+  </div>
 </div>
 </body>
 </html>

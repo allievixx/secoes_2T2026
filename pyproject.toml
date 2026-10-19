@@ -1,0 +1,11 @@
+[project]
+name = "secoes-2t-2026"
+version = "0.1.0"
+description = "Pipeline para gerar dados de seções eleitorais e publicar snapshots no Cloud Storage"
+requires-python = ">=3.11"
+dependencies = [
+    "google-cloud-storage>=2.18,<4",
+]
+
+[tool.uv]
+package = false

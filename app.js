@@ -22,6 +22,139 @@ async function fetchJSON(url, fresh = false) {
   } finally { clearTimeout(timer); }
 }
 
+function initializeNavigation() {
+  const navLinks = [...document.querySelectorAll(".nav a")];
+  let hold = 0;
+  function setNav(id) {
+    for (const a of navLinks) {
+      if (a.dataset.sec === id) a.setAttribute("aria-current", "page");
+      else a.removeAttribute("aria-current");
+    }
+  }
+  navLinks.forEach(a => a.addEventListener("click", event => {
+    event.preventDefault();
+    const el = $(a.dataset.sec);
+    if (el.tagName === "DETAILS") el.open = true;
+    if (a.dataset.sec === "sec-timeline" && globalThis.allSnapshots) {
+      renderTimeline(globalThis.allSnapshots);
+    }
+    hold = Date.now() + 1200;
+    el.scrollIntoView({ behavior:"smooth", block:"start" });
+    setNav(a.dataset.sec);
+  }));
+  document.querySelector(".logo").addEventListener("click", event => {
+    event.preventDefault();
+    window.scrollTo({ top:0, behavior:"smooth" });
+    setNav("top");
+  });
+  window.addEventListener("scroll", () => requestAnimationFrame(() => {
+    if (Date.now() < hold) return;
+    let current = "top";
+    for (const id of ["top", "sec-mapa", "sec-lista", "sec-uf", "sec-timeline", "sec-sobre"]) {
+      if ($(id).getBoundingClientRect().top - 84 < innerHeight * .35) current = id;
+    }
+    setNav(current);
+  }), { passive:true });
+}
+
+function renderTimeline(snapshots) {
+  if (!snapshots || snapshots.length < 2) {
+    $("timeline-charts").innerHTML = '<div class="facts" style="color:var(--muted);padding:12px">Necessário mínimo 2 cargas para comparação temporal.</div>';
+    return;
+  }
+  
+  const d3 = globalThis.d3;
+  const timeLabel = snapshot => snapshot.extractedAt
+    ? new Intl.DateTimeFormat("pt-BR", { hour:"2-digit", minute:"2-digit", timeZone:"America/Sao_Paulo" }).format(new Date(snapshot.extractedAt))
+    : "Único";
+  
+  const data = snapshots.map((snapshot, idx) => {
+    const T = { n:0, el:0, ap:0 };
+    if (snapshot.data.g) {
+      for (const g of snapshot.data.g) {
+        for (const s of g.s) {
+          T.n++;
+          T.el += s[1] || 0;
+          T.ap += s[2] || 0;
+        }
+      }
+    }
+    return {
+      time: timeLabel(snapshot),
+      idx,
+      sections: T.n,
+      voters: T.el,
+      eligible: T.ap
+    };
+  });
+  
+  const container = $("timeline-charts");
+  container.innerHTML = '';
+  
+  const metrics = [
+    { key: "sections", label: "Seções que mudam de local", color: "var(--l3)" },
+    { key: "voters", label: "Eleitores nelas", color: "var(--accent)" },
+    { key: "eligible", label: "Aptos", color: "var(--muted)" }
+  ];
+  
+  for (const metric of metrics) {
+    const chartDiv = document.createElement("div");
+    chartDiv.className = "timeline-chart";
+    
+    const title = document.createElement("div");
+    title.className = "timeline-title";
+    title.textContent = metric.label;
+    chartDiv.appendChild(title);
+    
+    const svg = d3.create("svg")
+      .attr("viewBox", [0, 0, 700, 300])
+      .attr("class", "timeline-svg");
+    
+    const margin = { top: 20, right: 30, bottom: 30, left: 60 };
+    const width = 700 - margin.left - margin.right;
+    const height = 300 - margin.top - margin.bottom;
+    
+    const x = d3.scaleLinear().domain([0, data.length - 1]).range([0, width]);
+    const y = d3.scaleLinear().domain([0, d3.max(data, d => d[metric.key])]).range([height, 0]);
+    
+    const line = d3.line()
+      .x((d, i) => x(i))
+      .y(d => y(d[metric.key]));
+    
+    const g = svg.append("g")
+      .attr("transform", `translate(${margin.left},${margin.top})`);
+    
+    g.append("g")
+      .attr("transform", `translate(0,${height})`)
+      .call(d3.axisBottom(x).tickFormat((d, i) => data[d] ? data[d].time : ""))
+      .style("font-size", "12px");
+    
+    g.append("g")
+      .call(d3.axisLeft(y))
+      .style("font-size", "12px");
+    
+    g.append("path")
+      .datum(data)
+      .attr("fill", "none")
+      .attr("stroke", metric.color)
+      .attr("stroke-width", 2.5)
+      .attr("d", line);
+    
+    g.selectAll(".dot")
+      .data(data)
+      .enter()
+      .append("circle")
+      .attr("cx", (d, i) => x(i))
+      .attr("cy", d => y(d[metric.key]))
+      .attr("r", 4)
+      .attr("fill", metric.color)
+      .attr("opacity", 0.7);
+    
+    chartDiv.appendChild(svg.node());
+    container.appendChild(chartDiv);
+  }
+}
+
 function initializeDashboard(D, municipalities, states) {
   const d3 = globalThis.d3;
   const meta = D.meta;
@@ -37,13 +170,13 @@ function initializeDashboard(D, municipalities, states) {
     const v = t.l + t.fv + t.ot;
     return Object.assign(g, t, { i, v, lr:v ? t.l/v : 0, fr:v ? t.fv/v : 0, ar:t.ap ? t.ab/t.ap : 0 });
   });
-  const F = { nv:false, far:false, longe:false };
+  const F = { far:false, longe:false };
   let WIN = "all", UF = "", SEL = null, SHOWN = 20;
   const secWin = s => s[4] == null || s[5] == null ? null : s[4] > s[5] ? "lula" : s[5] > s[4] ? "flavio" : "empate";
-  const secOk = s => (WIN === "all" || secWin(s) === WIN) && (!F.nv || s[9]);
+  const secOk = s => WIN === "all" || secWin(s) === WIN;
   const pass = (g, ignoreUF = false) => (ignoreUF || !UF || g.uf === UF) && g.s.some(secOk) && (!F.far || (g.km != null && g.km >= 2)) && (!F.longe || g.longe);
   const col = g => !g.v ? "var(--other)" : g.l > g.fv ? (g.lr-g.fr >= .3 ? "var(--l3)" : g.lr-g.fr >= .1 ? "var(--l2)" : "var(--l1)") : "var(--flavio)";
-  const scope = (includeUF = true) => [includeUF && UF, WIN === "lula" ? "seções onde Lula venceu" : WIN === "flavio" ? "seções onde Flávio venceu" : "", F.nv ? `entraram desde ${meta.newSinceLabel}` : "", F.far ? "mudaram 2 km ou mais" : "", F.longe ? "região longe da urna" : ""].filter(Boolean).join(" · ");
+  const scope = (includeUF = true) => [includeUF && UF, WIN === "lula" ? "seções onde Lula venceu" : WIN === "flavio" ? "seções onde Flávio venceu" : "", F.far ? "mudaram 2 km ou mais" : "", F.longe ? "região longe da urna" : ""].filter(Boolean).join(" · ");
 
   function renderSummary() {
     const T = { n:0, el:0, ap:0, ab:0, l:0, f:0, o:0, bn:0, far:0, lon:0, lonUnknown:0, mun:new Set() };
@@ -67,7 +200,7 @@ function initializeDashboard(D, municipalities, states) {
     $("kpis").innerHTML = [
       ["hot",int(T.n),"seções mudam de local"], ["hot",int(T.el),"eleitores nelas"],
       ["",V ? pct1(T.l/V) : "–","Lula nelas no 1º turno"], ["",int(T.far),"seções mudaram 2 km ou mais"],
-      ["",T.lonUnknown ? "–" : int(T.lon),T.lonUnknown ? "região longe da urna: dados incompletos" : "seções em região longe da urna"], ["",int(T.mun.size),"municípios"], ["",T.ap ? pct1(T.ab/T.ap) : "–","abstenção no 1º turno (Brasil: 20,8%)"],
+      ...(T.lonUnknown ? [] : [["",int(T.lon),"seções em região longe da urna"]]), ["",int(T.mun.size),"municípios"], ["",T.ap ? pct1(T.ab/T.ap) : "–","abstenção no 1º turno (Brasil: 20,8%)"],
     ].map(([c,v,l]) => `<div class="kpi ${c}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
     const parts = [["Lula",T.l,"var(--l3)"],["Flávio",T.f,"var(--flavio)"],["Outros",T.o,"var(--other)"],["Brancos e nulos",T.bn,"var(--bn)"],["Abstenção",T.ab,"var(--off)"]];
     const total = parts.reduce((sum,p) => sum+p[1],0) || 1;
@@ -76,21 +209,21 @@ function initializeDashboard(D, municipalities, states) {
   }
 
   function renderUF() {
-    const make = uf => ({uf,n:0,el:0,mun:new Set(),mv:0,wl:0,wf:0,we:0,l:0,f:0,o:0,ap:0,ab:0,far:0,lon:0,lonUnknown:0,nv:0,nvUnknown:0});
+    const make = uf => ({uf,n:0,el:0,mun:new Set(),mv:0,wl:0,wf:0,we:0,l:0,f:0,o:0,ap:0,ab:0,far:0,lon:0,lonUnknown:0});
     const by = {}, tot = make("Total");
     for (const g of G.filter(g => pass(g,true))) {
       const r = by[g.uf] ||= make(g.uf);
       for (const s of g.s.filter(secOk)) for (const x of [r,tot]) {
         x.n++; x.el+=s[1]; x.l+=s[4]||0; x.f+=s[5]||0; x.o+=s[6]||0; x.ap+=s[2]||0; x.ab+=s[3]||0;
         const w=secWin(s); if(w==="lula")x.wl++; else if(w==="flavio")x.wf++; else if(w==="empate")x.we++;
-        if(g.km!=null && g.km>=2)x.far++; if(g.longe)x.lon++; if(g.longe==null)x.lonUnknown++; if(s[9])x.nv++; if(s[9]==null)x.nvUnknown++; x.mun.add(g.uf+g.ib);
+        if(g.km!=null && g.km>=2)x.far++; if(g.longe)x.lon++; if(g.longe==null)x.lonUnknown++; x.mun.add(g.uf+g.ib);
       }
       r.mv++; tot.mv++;
     }
     const rows = Object.values(by).sort((a,b) => b.n-a.n);
-    const cell = r => { const V=r.l+r.f+r.o; return [r.uf,int(r.n),int(r.el),int(r.mun.size),int(r.mv),int(r.wl),int(r.wf),int(r.we),V?pct1(r.l/V):"–",V?pct1(r.f/V):"–",r.ap?pct1(r.ab/r.ap):"–",int(r.far),r.lonUnknown?"–":int(r.lon),r.nvUnknown?"–":int(r.nv)].map(v=>`<td>${v}</td>`).join(""); };
+    const cell = r => { const V=r.l+r.f+r.o; return [r.uf,int(r.n),int(r.el),int(r.mun.size),int(r.mv),int(r.wl),int(r.wf),int(r.we),V?pct1(r.l/V):"–",V?pct1(r.f/V):"–",r.ap?pct1(r.ab/r.ap):"–",int(r.far),r.lonUnknown?"–":int(r.lon)].map(v=>`<td>${v}</td>`).join(""); };
     $("ufscope").textContent = `${rows.length} estado${rows.length!==1?"s":""}${scope(false)?" · "+scope(false):""}`;
-    $("uftab").innerHTML = `<thead><tr>${["UF","Seções","Eleitores","Municípios","Mudanças de local","Lula venceu","Flávio venceu","Empate","Lula %","Flávio %","Abstenção","Mudou 2 km+","Região longe","Novas"].map(v=>`<th>${v}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr data-uf="${r.uf}" class="${UF===r.uf?"on":""}">${cell(r)}</tr>`).join("")}</tbody><tfoot><tr>${cell(tot)}</tr></tfoot>`;
+    $("uftab").innerHTML = `<thead><tr>${["UF","Seções","Eleitores","Municípios","Mudanças de local","Lula venceu","Flávio venceu","Empate","Lula %","Flávio %","Abstenção","Mudou 2 km+","Região longe"].map(v=>`<th>${v}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr data-uf="${r.uf}" class="${UF===r.uf?"on":""}">${cell(r)}</tr>`).join("")}</tbody><tfoot><tr>${cell(tot)}</tr></tfoot>`;
     document.querySelectorAll("#uftab tbody tr").forEach(tr => tr.onclick = () => { setUF(UF===tr.dataset.uf?"":tr.dataset.uf); $("top").scrollIntoView({behavior:"smooth",block:"start"}); });
   }
 
@@ -126,7 +259,7 @@ function initializeDashboard(D, municipalities, states) {
     gl.selectAll("line").data(vis.filter(g=>g.xo),g=>g.i).join("line").attr("class","mv").attr("x1",g=>g.xo[0]).attr("y1",g=>g.xo[1]).attr("x2",g=>g.xy[0]).attr("y2",g=>g.xy[1]);
     gl.selectAll("circle").data(vis.filter(g=>g.xo),g=>g.i).join("circle").attr("class","o").attr("cx",g=>g.xo[0]).attr("cy",g=>g.xo[1]).attr("r",rO);
     gp.selectAll("circle").data(vis,g=>g.i).join("circle").attr("class",g=>"p"+(SEL===g?" on":"")).attr("cx",g=>g.xy[0]).attr("cy",g=>g.xy[1]).attr("r",rP).attr("fill",col)
-      .on("mousemove",(e,g)=>showTip(e,`<b>${g.m}</b> · ${g.uf} · zona ${g.z}${g.nv?' <span class="tag">nova</span>':""}<br>${g.o} → <b>${g.f}</b><br>${g.km!=null?`${kmf(g.km)} (${walk(g.km)})`:"distância desconhecida"} · ${g.s.length} seções, ${int(g.el)} eleitores<br>1º turno: Lula ${pct(g.lr)} · Flávio ${pct(g.fr)} · abstenção ${pct(g.ar)}`))
+      .on("mousemove",(e,g)=>showTip(e,`<b>${g.m}</b> · ${g.uf} · zona ${g.z}<br>${g.o} → <b>${g.f}</b><br>${g.km!=null?`${kmf(g.km)} (${walk(g.km)})`:"distância desconhecida"} · ${g.s.length} seções, ${int(g.el)} eleitores<br>1º turno: Lula ${pct(g.lr)} · Flávio ${pct(g.fr)} · abstenção ${pct(g.ar)}`))
       .on("mouseleave",()=>tip.hidden=true).on("click",(e,g)=>pick(g,false));
   }
   const zoom=d3.zoom().scaleExtent([1,300]).filter(e=>e.type==="touchstart"?e.touches.length>1:!e.button)
@@ -159,7 +292,7 @@ function initializeDashboard(D, municipalities, states) {
       <div class="keys" style="margin-top:6px"><span>Lula <b>${int(g.l)}</b> (${pct1(g.lr)})</span><span>Flávio <b>${int(g.fv)}</b> (${pct1(g.fr)})</span><span>Outros <b>${int(g.ot)}</b></span><span>Brancos e nulos <b>${int(g.b+g.n)}</b></span><span>Abstenção <b>${int(g.ab)}</b> (${pct1(g.ar)})</span></div></div>
       <div class="tblw"><table><thead><tr><th>Seção</th><th>Venceu</th><th>Eleitores</th><th>Lula</th><th>Flávio</th><th>Outros</th><th>Br/Nulos</th><th>Abst.</th></tr></thead><tbody>${g.s.map(s=>{
         const v=(s[4]||0)+(s[5]||0)+(s[6]||0);
-        return `<tr style="${secOk(s)?"":"opacity:.4"}"><td>${s[0]}${s[9]?' <span class="tag">nova</span>':""}</td><td style="font-family:var(--f-ui);color:${secWin(s)==="lula"?"var(--accent)":"var(--muted)"}">${{lula:"Lula",flavio:"Flávio",empate:"Empate"}[secWin(s)]||"–"}</td><td>${int(s[1])}</td><td>${s[4]!=null?`${int(s[4])} <small>${v?pct(s[4]/v):""}</small>`:"–"}</td><td>${s[5]!=null?`${int(s[5])} <small>${v?pct(s[5]/v):""}</small>`:"–"}</td><td>${int(s[6])}</td><td>${s[7]!=null&&s[8]!=null?int(s[7]+s[8]):"–"}</td><td>${s[3]!=null?`${int(s[3])} <small>${s[2]?pct(s[3]/s[2]):""}</small>`:"–"}</td></tr>`;
+        return `<tr><td>${s[0]}</td><td style="font-family:var(--f-ui);color:${secWin(s)==="lula"?"var(--accent)":"var(--muted)"}">${{lula:"Lula",flavio:"Flávio",empate:"Empate"}[secWin(s)]||"–"}</td><td>${int(s[1])}</td><td>${s[4]!=null?`${int(s[4])} <small>${v?pct(s[4]/v):""}</small>`:"–"}</td><td>${s[5]!=null?`${int(s[5])} <small>${v?pct(s[5]/v):""}</small>`:"–"}</td><td>${int(s[6])}</td><td>${s[7]!=null&&s[8]!=null?int(s[7]+s[8]):"–"}</td><td>${s[3]!=null?`${int(s[3])} <small>${s[2]?pct(s[3]/s[2]):""}</small>`:"–"}</td></tr>`;
       }).join("")}</tbody></table></div><button type="button" class="more" id="clear">Ver todas as mudanças</button>`;
     $("clear").onclick=()=>{SEL=null;draw();renderCard();};
   }
@@ -167,7 +300,7 @@ function initializeDashboard(D, municipalities, states) {
   function renderList() {
     const arr=G.filter(g=>pass(g)).sort((a,b)=>b.l-a.l);
     $("listscope").textContent=(UF||"Brasil")+" · mais votos do Lula no 1º turno primeiro";
-    $("list").innerHTML=arr.length?arr.slice(0,SHOWN).map(g=>`<button type="button" class="row" data-i="${g.i}"><span class="nm">${g.m} · ${g.uf} <span style="font-weight:400;color:var(--muted)">zona ${g.z}</span>${g.nv?'<span class="tag">nova</span>':""}</span><span class="sub">${g.o} → ${g.f}<br>${g.s.length} seç${g.s.length>1?"ões":"ão"}${WIN!=="all"?` (${g.s.filter(secOk).length} com vitória ${WIN==="lula"?"do Lula":"do Flávio"})`:""} · Lula ${pct(g.lr)} · Flávio ${pct(g.fr)} · abstenção ${pct(g.ar)}</span><span class="pc">${g.km!=null?walk(g.km):"–"}<small>${g.km!=null?kmf(g.km):"distância ?"}</small></span></button>`).join(""):'<div class="empty">Nenhuma mudança com esse filtro.</div>';
+    $("list").innerHTML=arr.length?arr.slice(0,SHOWN).map(g=>`<button type="button" class="row" data-i="${g.i}"><span class="nm">${g.m} · ${g.uf} <span style="font-weight:400;color:var(--muted)">zona ${g.z}</span></span><span class="sub">${g.o} → ${g.f}<br>${g.s.length} seç${g.s.length>1?"ões":"ão"}${WIN!=="all"?` (${g.s.filter(secOk).length} com vitória ${WIN==="lula"?"do Lula":"do Flávio"})`:""} · Lula ${pct(g.lr)} · Flávio ${pct(g.fr)} · abstenção ${pct(g.ar)}</span><span class="pc">${g.km!=null?walk(g.km):"–"}<small>${g.km!=null?kmf(g.km):"distância ?"}</small></span></button>`).join(""):'<div class="empty">Nenhuma mudança com esse filtro.</div>';
     $("more").hidden=arr.length<=SHOWN;
     $("list").querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>pick(G[+b.dataset.i],true));
   }
@@ -198,14 +331,6 @@ function initializeDashboard(D, municipalities, states) {
     WIN=b.dataset.win;document.querySelectorAll("[data-win]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));SEL=null;SHOWN=20;render();
   });
   for(const k of Object.keys(F)) { const b=$("f-"+k);b.onclick=()=>{F[k]=!F[k];b.setAttribute("aria-pressed",String(F[k]));SEL=null;SHOWN=20;render();}; }
-  $("f-nv").hidden=meta.novas===0;
-  $("f-nv").textContent=`Entraram desde ${meta.newSinceLabel}`;
-
-  const navLinks=[...document.querySelectorAll(".nav a")];let hold=0;
-  function setNav(id) { for(const a of navLinks) {if(a.dataset.sec===id)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");} }
-  navLinks.forEach(a=>a.addEventListener("click",e=>{e.preventDefault();const el=$(a.dataset.sec);if(el.tagName==="DETAILS")el.open=true;hold=Date.now()+1200;el.scrollIntoView({behavior:"smooth",block:"start"});setNav(a.dataset.sec);}));
-  document.querySelector(".logo").addEventListener("click",e=>{e.preventDefault();window.scrollTo({top:0,behavior:"smooth"});setNav("top");});
-  window.addEventListener("scroll",()=>requestAnimationFrame(()=>{if(Date.now()<hold)return;let cur="top";for(const id of ["top","sec-mapa","sec-lista","sec-uf","sec-sobre"])if($(id).getBoundingClientRect().top-84<innerHeight*.35)cur=id;setNav(cur);}),{passive:true});
   $("gen").textContent=meta.gen;$("registry-date").textContent=meta.reg;$("source-sections").textContent=int(meta.secoes);
   render();
 }
@@ -223,7 +348,121 @@ async function start() {
     ]);
     for(const geo of [municipalities,states])if(geo.type!=="FeatureCollection"||!geo.features?.length)throw new Error("A fonte do mapa não retornou uma coleção de geometrias válida.");
     $("dashboard").hidden=false;
-    initializeDashboard(data,municipalities,states);
+    initializeNavigation();
+    const snapshots = data.snapshots ?? [{ extractedAt:null, dateLabel:config.metadata?.extractionDate || config.metadata?.gen || "Carga atual", data }];
+    const dayKey = snapshot => {
+      if (!snapshot.extractedAt) return snapshot.dateLabel;
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        year:"numeric", month:"2-digit", day:"2-digit", timeZone:"America/Sao_Paulo",
+      }).formatToParts(new Date(snapshot.extractedAt));
+      const part = type => parts.find(item => item.type === type).value;
+      return `${part("year")}-${part("month")}-${part("day")}`;
+    };
+    const dayLabel = snapshot => snapshot.extractedAt
+      ? new Intl.DateTimeFormat("pt-BR", { dateStyle:"short", timeZone:"America/Sao_Paulo" }).format(new Date(snapshot.extractedAt))
+      : snapshot.dateLabel;
+    const timeLabel = snapshot => snapshot.extractedAt
+      ? new Intl.DateTimeFormat("pt-BR", { hour:"2-digit", minute:"2-digit", timeZone:"America/Sao_Paulo" }).format(new Date(snapshot.extractedAt))
+      : "Único";
+    
+    const byDay = new Map();
+    for (const snapshot of snapshots) {
+      const key = dayKey(snapshot);
+      if (!byDay.has(key)) {
+        byDay.set(key, { key, label:dayLabel(snapshot), loads:[] });
+      }
+      byDay.get(key).loads.push(snapshot);
+    }
+    
+    globalThis.allSnapshots = snapshots;
+    
+    const days = [...byDay.values()].sort((a,b) => b.key.localeCompare(a.key));
+    days.forEach(day => {
+      day.loads.sort((a,b) => (b.extractedAt || "").localeCompare(a.extractedAt || ""));
+    });
+    
+    const tabs = $("snapshot-tabs"), panel = $("snapshot-panel");
+    const panelTemplate = panel.innerHTML;
+    let activeDay = days[0].key;
+    let activeLoad = null;
+    
+    const activate = (day, loadIndex = 0) => {
+      activeDay = day;
+      const dayData = days.find(d => d.key === day);
+      const snapshot = dayData.loads[loadIndex];
+      activeLoad = loadIndex;
+      
+      for (const tab of tabs.querySelectorAll('[role="tab"]')) {
+        const selected = tab.dataset.day === activeDay;
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+      }
+      
+      const select = tabs.querySelector(`select[data-day="${day}"]`);
+      if (select) select.value = loadIndex;
+      
+      panel.innerHTML = panelTemplate;
+      panel.setAttribute("aria-labelledby", `snapshot-tab-${activeDay}`);
+      const displayLabel = dayData.loads.length > 1 
+        ? `${dayData.label} - ${timeLabel(snapshot)}`
+        : dayData.label;
+      const genLabel = snapshot.extractedAt
+        ? `${dayData.label} às ${timeLabel(snapshot)}`
+        : snapshot.data.meta.gen;
+      initializeDashboard({
+        ...snapshot.data,
+        meta: { ...snapshot.data.meta, extractionDate:displayLabel, gen:genLabel },
+      }, municipalities, states);
+    };
+    
+    days.forEach((day, index) => {
+      const tabContainer = document.createElement("div");
+      tabContainer.style.display = "contents";
+      
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "snapshot-tab";
+      tab.id = `snapshot-tab-${day.key}`;
+      tab.dataset.day = day.key;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", "snapshot-panel");
+      tab.setAttribute("aria-selected", "false");
+      tab.tabIndex = -1;
+      tab.textContent = day.label;
+      tab.onclick = () => activate(day.key, 0);
+      tab.onkeydown = event => {
+        let next = index;
+        if (event.key === "ArrowRight") next = (index + 1) % days.length;
+        else if (event.key === "ArrowLeft") next = (index - 1 + days.length) % days.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = days.length - 1;
+        else return;
+        event.preventDefault();
+        activate(days[next].key, 0);
+        $(`snapshot-tab-${days[next].key}`).focus();
+      };
+      tabContainer.appendChild(tab);
+      
+      if (day.loads.length > 1) {
+        const select = document.createElement("select");
+        select.className = "snapshot-load-select";
+        select.dataset.day = day.key;
+        select.setAttribute("aria-label", `Cargas para ${day.label}`);
+        select.onchange = event => activate(day.key, parseInt(event.target.value));
+        
+        day.loads.forEach((load, loadIdx) => {
+          const option = document.createElement("option");
+          option.value = loadIdx;
+          option.textContent = timeLabel(load);
+          select.appendChild(option);
+        });
+        
+        tabContainer.appendChild(select);
+      }
+      
+      tabs.append(tabContainer);
+    });
+    activate(activeDay, 0);
     $("dashboard").setAttribute("aria-busy","false");$("load-status").hidden=true;
   } catch(error) {
     $("dashboard").hidden=true;

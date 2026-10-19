@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cruza fontes TSE/IBGE e publica no BigQuery ou CSV (Python >= 3.11)."""
+"""Cruza fontes TSE/IBGE e publica o snapshot no Cloud Storage ou em CSV."""
 
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 if __package__:
-    from .bigquery_io import BigQueryError, publish
+    from .storage_io import StorageError, public_url, publish_json, target as storage_target
 else:
-    from bigquery_io import BigQueryError, publish
+    from storage_io import StorageError, public_url, publish_json, target as storage_target
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("gerar_dados")
@@ -37,7 +37,7 @@ FIELDS = [
     "uf", "municipio", "cd_ibge", "zona", "secao", "eleitores",
     "local_1t", "endereco_1t", "lat_1t", "lon_1t", "local_2t", "endereco_2t",
     "bairro_2t", "lat_2t", "lon_2t", "distancia_km", "regiao_longe_da_urna",
-    "entrou_desde_15_10", "aptos_1t", "abstencao_1t", "lula_1t", "flavio_1t",
+    "aptos_1t", "abstencao_1t", "lula_1t", "flavio_1t",
     "outros_1t", "brancos_1t", "nulos_1t",
 ]
 CHANGES = {"AA_ELEICAO", "SG_UF", "NM_MUNICIPIO", "NR_ZONA", "NR_SECAO",
@@ -321,7 +321,7 @@ def load_distances(path: Path, encoding: str) -> dict[tuple[str, str, int, str],
     return result
 
 
-def build_rows(changes, sections, locations, names, ibge, results, baseline, distances):
+def build_rows(changes, sections, locations, names, ibge, results, distances):
     output: list[dict[str, Any]] = []
     issues: list[str] = []
     for named, change in sorted(changes.items()):
@@ -330,8 +330,6 @@ def build_rows(changes, sections, locations, names, ibge, results, baseline, dis
         row.update(uf=uf, municipio=change["NM_MUNICIPIO"], zona=zone, secao=section,
                    eleitores=integer(change["QT_ELEITORES"], "QT_ELEITORES"),
                    local_1t=change["NM_LOCAL_VOTACAO_INICIAL"], local_2t=change["NM_LOCAL_VOTACAO_FINAL"])
-        if baseline is not None:
-            row["entrou_desde_15_10"] = named not in baseline
         code = ibge.get((uf, municipality))
         if code is None:
             raise DataError(f"Município não encontrado no IBGE: {uf}:{change['NM_MUNICIPIO']}; configure ibgeOverrides")
@@ -408,7 +406,8 @@ def write_output(path: Path, rows: list[dict[str, Any]]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=ROOT / "pipeline-config.json")
-    parser.add_argument("--destination", choices=["bigquery", "csv", "both"], default="bigquery", help="Destino (padrão: bigquery)")
+    parser.add_argument("--destination", choices=["storage", "csv", "both"], default="storage",
+                        help="storage publica no Cloud Storage; both também grava CSV")
     parser.add_argument("--output", type=Path, default=ROOT / "data/secoes_alteradas_2t_2026.csv")
     parser.add_argument("--report", type=Path, default=ROOT / "data/geracao-relatorio.json")
     parser.add_argument("--cache-dir", type=Path, default=ROOT / ".cache/tse")
@@ -420,6 +419,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     try:
         config = json.loads(args.config.read_text(encoding="utf-8"))
+        configured_allow_incomplete = config.get("allowIncomplete", False)
+        if not isinstance(configured_allow_incomplete, bool):
+            raise DataError("allowIncomplete deve ser um booleano")
+        allow_incomplete = args.allow_incomplete or configured_allow_incomplete
+        if args.destination in {"storage", "both"}:
+            storage_target(config.get("storage", {}))
         base, encoding, year = args.config.resolve().parent, config.get("encoding", "cp1252"), int(config.get("year", 2026))
         sources = config["sources"]
         source = lambda name: download(resolve_source(sources[name], base), args.cache_dir, args.refresh)
@@ -433,8 +438,7 @@ def main(argv: list[str] | None = None) -> int:
             raise DataError("A saída já existe; use --output para outro caminho ou --overwrite. O arquivo existente não será lido.")
         if args.output.resolve() == args.report.resolve():
             raise DataError("Saída e relatório devem ter caminhos diferentes")
-        # Enriquecimentos adiados pelo usuário: ausências viram NULL, sem bloquear a carga.
-        baseline = load_changes(source("baseline"), encoding, year) if sources.get("baseline") else None
+        # Enriquecimento adiado pelo usuário: ausências viram NULL, sem bloquear a carga.
         distances = load_distances(source("longDistance"), config.get("longDistanceEncoding", "utf-8-sig")) if sources.get("longDistance") else {}
         ibge = load_ibge(source("municipalities"), config.get("ibgeOverrides", {}))
         sections, locations, names = load_registry(source("registry"), changes, encoding, year)
@@ -444,9 +448,10 @@ def main(argv: list[str] | None = None) -> int:
         if lula == flavio or any(not 1 <= int(n) <= 94 for n in [lula, flavio]):
             raise DataError("Números dos candidatos devem ser diferentes e estar entre 1 e 94")
         results = load_results(source("votes"), source("details"), wanted, encoding, year, lula, flavio)
-        rows, issues = build_rows(changes, sections, locations, names, ibge, results, baseline, distances)
+        rows, issues = build_rows(changes, sections, locations, names, ibge, results, distances)
+        generated_at = datetime.now(timezone.utc)
         report = {
-            "generated_at":datetime.now(timezone.utc).isoformat(),
+            "generated_at":generated_at.isoformat(),
             "year":year, "sources":sources, "candidates":candidates,
             "secoes":len(rows), "eleitores":sum(r["eleitores"] for r in rows),
             "municipios":len({r["cd_ibge"] for r in rows}),
@@ -454,21 +459,26 @@ def main(argv: list[str] | None = None) -> int:
             "campos_ausentes":{field:sum(r[field] == "" for r in rows) for field in FIELDS},
             "pendencias":issues, "publicado":False,
             "destination":args.destination,
-            "enriquecimentos_adiados":[name for name in ["baseline", "longDistance"] if not sources.get(name)],
+            "allow_incomplete":allow_incomplete,
+            "enriquecimentos_adiados":[name for name in ["longDistance"] if not sources.get(name)],
         }
         write_json(args.report, report)
-        if issues and not args.allow_incomplete:
+        for issue in issues:
+            LOGGER.warning("Pendência: %s", issue)
+        if issues and not allow_incomplete:
             raise DataError(f"{len(issues)} pendências; saída preservada. Consulte {args.report}")
-        if args.destination in {"bigquery", "both"}:
-            report["bigquery_table"] = publish(rows, FIELDS, config.get("bigquery", {}))
-            LOGGER.info("Publicadas %d seções em %s", len(rows), report["bigquery_table"])
+        if args.destination in {"storage", "both"}:
+            report["storage_object"] = publish_json(rows, FIELDS, config.get("storage", {}), generated_at)
+            bucket, object_name = storage_target(config.get("storage", {}))
+            report["dashboard_data_url"] = public_url(bucket, object_name)
+            LOGGER.info("Publicado snapshot JSON em %s", report["storage_object"])
         if write_csv:
             write_output(args.output, rows)
             LOGGER.info("Geradas %d seções em %s", len(rows), args.output)
         report["publicado"] = True
         write_json(args.report, report)
         return 0
-    except (DataError, BigQueryError, OSError, ValueError, KeyError, zipfile.BadZipFile, UnicodeError) as exc:
+    except (DataError, StorageError, OSError, ValueError, KeyError, zipfile.BadZipFile, UnicodeError) as exc:
         LOGGER.error("%s", exc)
         return 1
 

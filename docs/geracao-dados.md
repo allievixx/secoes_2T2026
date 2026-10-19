@@ -1,18 +1,20 @@
 # Geração do CSV com Python
 
-A rotina [scripts/gerar_dados.py](../scripts/gerar_dados.py) gera as mesmas **25 colunas** descritas no README, usando as fontes oficiais configuradas em [pipeline-config.json](../pipeline-config.json). Requer Python **3.11 ou superior**, apenas com biblioteca padrão; não há pacotes pip a instalar. O destino padrão é **BigQuery**, em `comite-tecnologia.alteracao_locais_votacao.secoes_alteradas_2t_2026`, localização **US**, usando a CLI `bq` já autenticada. Veja [bigquery.md](bigquery.md).
+A rotina [scripts/gerar_dados.py](../scripts/gerar_dados.py) gera as mesmas **25 colunas** descritas no README, usando as fontes oficiais configuradas em [pipeline-config.json](../pipeline-config.json). Requer Python **3.11 ou superior** e `uv`. As dependências estão em [pyproject.toml](../pyproject.toml) e fixadas em [uv.lock](../uv.lock). O destino padrão é somente o JSON público `gs://extracao_alteracao_locais_votacao/secoes_alteradas_2t_2026.json`. No Cloud Run, use a identidade de serviço anexada ao job; não configure chave privada. Veja [cloud-storage.md](cloud-storage.md).
 
 ## Execução
 
-- Inspecionar o arquivo novo do TSE sem gerar saída: `python3 scripts/gerar_dados.py --inspect`.
-- Gerar e publicar o snapshot no BigQuery: `python3 scripts/gerar_dados.py`.
-- Gerar CSV separado, sem publicar no BQ: `python3 scripts/gerar_dados.py --destination csv --output data/secoes_novas.csv`.
-- Publicar sobre o CSV existente, explicitamente: `python3 scripts/gerar_dados.py --destination csv --overwrite`.
-- Testes isolados: `python3 -m unittest discover -s tests -p 'test_*.py' -v`.
+- Criar o ambiente virtual e instalar dependências: `uv sync`.
+- Inspecionar o arquivo novo do TSE sem gerar saída: `uv run python scripts/gerar_dados.py --inspect`.
+- Gerar e publicar o snapshot no Cloud Storage: `uv run python scripts/gerar_dados.py`.
+- Gerar somente CSV, sem publicar no Storage: `uv run python scripts/gerar_dados.py --destination csv --output data/secoes_novas.csv`.
+- Publicar no Storage e também exportar CSV: `uv run python scripts/gerar_dados.py --destination both --output data/secoes_novas.csv`.
+- Sobrescrever explicitamente um CSV existente: `uv run python scripts/gerar_dados.py --destination csv --overwrite`.
+- Testes isolados: `uv run python -m unittest discover -s tests -p 'test_*.py' -v`.
 
 Os comandos pressupõem execução na raiz do repositório. `--config`, `--output`, `--report` e `--cache-dir` aceitam outros caminhos. Caminhos das fontes dentro da configuração são relativos ao diretório dela; podem ser arquivos locais ou URLs HTTP(S).
 
-A saída CSV existente **não é lida**, nem é usada como entrada ou referência. No modo CSV, a rotina recusa substituição sem `--overwrite` e usa gravação atômica. No modo BigQuery, cada carga bem-sucedida substitui atomicamente o snapshot da tabela; não lê nem grava o CSV. A validação anterior com fontes reais gerou uma cópia separada no cache, preservando o CSV original. A integração BQ foi testada apenas com mocks, sem executar carga real.
+A saída CSV existente **não é lida**, nem é usada como entrada ou referência. No modo CSV, a rotina recusa substituição sem `--overwrite` e usa gravação atômica. No destino padrão, o objeto JSON é substituído após a geração e validação completas; o conteúdo tem nulos e tipos nativos no formato `{"rows":[...]}`. Uploads vazios são recusados para preservar o snapshot anterior. A validação anterior com fontes reais gerou uma cópia separada no cache, preservando o CSV original. A integração com Storage é testada com mocks, sem publicar objetos reais.
 
 ## Fontes e cruzamentos
 
@@ -23,7 +25,6 @@ A saída CSV existente **não é lida**, nem é usada como entrada ou referênci
 | `votes` | `votacao_secao_2026_BR`: votos por seção, filtrados para ano configurado, 1º turno e presidente (`CD_CARGO=1`). |
 | `details` | `detalhe_votacao_secao_2026`: aptos, abstenções, brancos e nulos, com os mesmos filtros. |
 | `municipalities` | API de localidades do IBGE: nome + UF → código IBGE de sete dígitos. O código TSE **não é** o código IBGE. |
-| `baseline` | Snapshot de alterações de **15/10**, com o mesmo esquema de `changes`, para identificar seções que entraram depois. Não foi localizada uma URL histórica a partir do README. |
 | `longDistance` | Base externa de distância média dos moradores até o local final de votação, para aplicar o critério “Longe da urna”. O README não informa URL nem metodologia suficiente para reconstruí-la. |
 
 Os cabeçalhos das quatro fontes TSE foram verificados nos arquivos oficiais. A fonte de alterações usa nomes minúsculos e CP1252; o leitor normaliza os cabeçalhos e aceita CSV ou ZIP. O restante dos arquivos TSE também é lido como CP1252, configurável em `encoding`. A saída é UTF-8, separada por `;`, com `True`/`False` para booleanos conhecidos e campos vazios para valores desconhecidos.
@@ -59,9 +60,7 @@ Para fornecer o enriquecimento, configure `sources.longDistance` como CSV UTF-8 
 
 A rotina aplica `distancia_media_km >= 5`. Não calcula essa média sem os dados necessários.
 
-Para `entrou_desde_15_10`, configure `sources.baseline` com o snapshot daquela data. A comparação é feita por UF, município, zona e seção, independentemente de a seção ter mudado de endereço novamente. O arquivo atual não revela a data de entrada de cada seção.
-
-**Essas duas entradas foram adiadas e não são mais obrigatórias.** Sem elas, os indicadores ficam NULL no BigQuery (vazios no CSV), sem impedir publicação. `--allow-incomplete` permite outras lacunas, como resultados ausentes ou local final não localizado. Não transforma desconhecido em `False`, zero, “perto” ou “seção antiga”. O dashboard preserva indicadores desconhecidos e sinaliza cobertura incompleta; não os apresenta como medidos.
+O indicador de entrada relativa ao snapshot de 15/10 foi removido: o histórico de snapshots passa a registrar quando cada seção aparece ou muda entre extrações, sem um campo booleano fixo àquela data. A fonte `longDistance` foi adiada e não é obrigatória; sem ela, esse indicador fica `null` no JSON (vazio no CSV). A opção `allowIncomplete` em [pipeline-config.json](../pipeline-config.json) está habilitada para incluir seções sem correspondência de local final; `--allow-incomplete` também pode habilitar esse comportamento em uma execução local. Valores ausentes não são transformados em `False`, zero ou “perto”.
 
 ## Download, cache e relatório
 
@@ -69,8 +68,8 @@ Os ZIPs nacionais são grandes (aproximadamente 506 MB somados, nas versões ver
 
 O cache é identificado pela URL e reutilizado. Como as URLs de cadastro e resultados são mutáveis, use `--refresh` para buscar uma versão nova. Para reproduzir exatamente uma geração, preserve os arquivos baixados e configure suas cópias locais; a versão do cadastro de 17/10 citada no README não é garantida pela URL atual.
 
-O relatório (por padrão, no diretório de dados, com nome `geracao-relatorio.json`) registra URLs, instante UTC, candidatos, totais, cobertura dos campos, destino, enriquecimentos adiados e pendências por seção. Com outras falhas de enriquecimento, ele é escrito, mas a saída não é publicada sem `--allow-incomplete`. O relatório só marca `publicado: true` depois de concluir a escrita/carga. Erros estruturais interrompem antes da publicação.
+O relatório (por padrão, no diretório de dados, com nome `geracao-relatorio.json`) registra URLs, instante UTC, candidatos, totais, cobertura dos campos, destino, enriquecimentos adiados e pendências por seção. No Cloud Storage, cada execução acrescenta `{"extracted_at":"<UTC ISO-8601>","rows":[...]}` à lista `snapshots`, preservando as anteriores. A aba diária mostra o snapshot mais recente daquele dia em `America/Sao_Paulo`; execuções mais antigas do mesmo dia continuam no JSON. Uma falha de validação ou upload não substitui o histórico publicado.
 
 O ZIP de alterações indicado retornou **774 seções e 229.018 eleitores** na validação. Isso não coincide com as 4.288 seções/1.578.731 eleitores da versão original: a rotina reproduz o **contrato e os cruzamentos**, não força números antigos nem promete igualdade byte a byte entre snapshots diferentes.
 
-Após publicar uma nova base, atualize também as datas em [dashboard-config.json](../dashboard-config.json). O gerador não altera automaticamente metadados editoriais nem a configuração do dashboard.
+O instante do snapshot é gerado automaticamente pelo job; as datas editoriais da publicação da lista-fonte e da versão do cadastro continuam em [dashboard-config.json](../dashboard-config.json).

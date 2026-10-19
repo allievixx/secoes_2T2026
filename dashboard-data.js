@@ -2,7 +2,7 @@ const REQUIRED_COLUMNS = [
   "uf", "municipio", "cd_ibge", "zona", "secao", "eleitores",
   "local_1t", "endereco_1t", "lat_1t", "lon_1t",
   "local_2t", "endereco_2t", "bairro_2t", "lat_2t", "lon_2t",
-  "distancia_km", "regiao_longe_da_urna", "entrou_desde_15_10",
+  "distancia_km", "regiao_longe_da_urna",
   "aptos_1t", "abstencao_1t", "lula_1t", "flavio_1t", "outros_1t",
   "brancos_1t", "nulos_1t",
 ];
@@ -50,7 +50,7 @@ export function prepareDashboardData(rows, metadata = {}) {
   const sections = new Set();
   const municipalities = new Set();
   const meta = {
-    ...metadata, secoes: 0, eleitores: 0, municipios: 0, novas: 0, novas_el: 0,
+    ...metadata, secoes: 0, eleitores: 0, municipios: 0,
     aptos: 0, abst: 0, lula: 0, flavio: 0, outros: 0, brancos: 0, nulos: 0,
   };
 
@@ -75,7 +75,6 @@ export function prepareDashboardData(rows, metadata = {}) {
       longe: boolean(row.regiao_longe_da_urna, "regiao_longe_da_urna", index, true),
     };
     if (g.km !== null && g.km < 0) throw new Error(`Distância inválida na linha ${index + 2}.`);
-    const nv = boolean(row.entrou_desde_15_10, "entrou_desde_15_10", index, true);
     const values = ["eleitores", "aptos_1t", "abstencao_1t", "lula_1t", "flavio_1t", "outros_1t", "brancos_1t", "nulos_1t"]
       .map(column => {
         const value = number(row[column], column, index, column === "eleitores");
@@ -87,12 +86,10 @@ export function prepareDashboardData(rows, metadata = {}) {
     const key = JSON.stringify(g);
     if (!groups.has(key)) groups.set(key, { ...g, nv: false, s: [] });
     const group = groups.get(key);
-    group.s.push([section, ...values, nv]);
-    group.nv ||= nv;
+    group.s.push([section, ...values]);
     meta.secoes++;
     const totals = ["eleitores", "aptos", "abst", "lula", "flavio", "outros", "brancos", "nulos"];
     totals.forEach((field, i) => { meta[field] += values[i] ?? 0; });
-    if (nv) { meta.novas++; meta.novas_el += values[0]; }
     municipalities.add(`${uf}:${ib}`);
   });
   meta.municipios = municipalities.size;
@@ -106,16 +103,34 @@ export async function loadDashboardData(url, metadata = {}, d3 = globalThis.d3, 
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     let rows;
+    let snapshots;
     if (format === "json") {
       const response = await fetch(url, { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error(`Não foi possível consultar a API de dados (HTTP ${response.status}).`);
       const payload = await response.json();
-      rows = Array.isArray(payload) ? payload : payload?.rows;
-      if (!Array.isArray(rows)) throw new Error("A API deve retornar uma lista de seções ou um objeto com rows.");
+      if (Array.isArray(payload?.snapshots)) {
+        if (!payload.snapshots.length) throw new Error("O histórico não contém extrações.");
+        snapshots = payload.snapshots.map((snapshot, index) => {
+          const extractedAt = snapshot?.extracted_at;
+          const timestamp = typeof extractedAt === "string" ? new Date(extractedAt) : null;
+          if (!Array.isArray(snapshot?.rows) || Number.isNaN(timestamp?.getTime())
+            || typeof extractedAt !== "string" || !/[zZ]|[+-]\d{2}:\d{2}$/.test(extractedAt)) {
+            throw new Error(`Extração inválida no histórico, item ${index + 1}.`);
+          }
+          return { extractedAt: timestamp.toISOString(), data: prepareDashboardData(snapshot.rows, metadata) };
+        }).sort((a,b) => a.extractedAt.localeCompare(b.extractedAt));
+      } else {
+        rows = Array.isArray(payload) ? payload : payload?.rows;
+        if (!Array.isArray(rows)) throw new Error("A API deve retornar uma lista de seções, rows ou snapshots.");
+      }
     } else {
       rows = await d3.dsv(";", url, { cache: "no-store", signal: controller.signal });
     }
-    return prepareDashboardData(rows, metadata);
+    if (!snapshots) {
+      const data = prepareDashboardData(rows, metadata);
+      snapshots = [{ extractedAt: null, dateLabel: metadata.extractionDate || metadata.gen || "Carga atual", data }];
+    }
+    return { ...snapshots[snapshots.length - 1].data, snapshots };
   } finally {
     clearTimeout(timeout);
   }

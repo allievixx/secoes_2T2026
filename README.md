@@ -8,18 +8,17 @@ a aplicação mantém o mapa, resumo, filtros, lista e tabela por estado. os dad
 
 Requer Node.js 20 ou superior. Instale as dependências com `npm install` e inicie com `npm start`. Abra http://localhost:8080. Para executar os testes, use `npm test`.
 
-Para consultar **BigQuery** em vez do CSV, use `npm run start:bq` (requer Python 3.11+ e CLI `bq` já autenticada). Esse modo serve o dashboard e uma API local em http://127.0.0.1:8080. Veja [docs/bigquery.md](docs/bigquery.md).
-
-Também funciona no GitHub Pages, sem backend ou etapa de build: publique os arquivos da raiz junto com a pasta de dados. Abrir o HTML diretamente por `file://` não funciona, pois o navegador restringe o carregamento de módulos e requisições locais.
+Também funciona no GitHub Pages, sem backend ou etapa de build: publique os arquivos estáticos da raiz. O dashboard carrega o snapshot JSON público no Cloud Storage; credenciais Google não ficam no navegador. Abrir o HTML diretamente por `file://` não funciona, pois o navegador restringe o carregamento de módulos e requisições locais.
 
 ## fontes dinâmicas e atualização
 
-- [dashboard-config.json](dashboard-config.json) configura a URL do CSV, as URLs das malhas geográficas e os metadados de publicação.
-- `dataUrl` aponta inicialmente para o CSV existente na pasta de dados. Basta substituir a base mantendo o esquema abaixo e recarregar a página; não é necessário alterar o código nem gerar outro HTML. A requisição usa `cache: no-store`.
-- Para buscar de outro servidor, altere `dataUrl` para uma URL HTTP(S) que retorne o mesmo CSV UTF-8 separado por ponto e vírgula. Fontes externas precisam permitir CORS. Nunca inclua chaves privadas no frontend.
-- Datas de publicação, versão do cadastro e datas dos turnos ficam em `metadata`; atualize-as junto com a base.
+- [dashboard-config.json](dashboard-config.json) configura a URL JSON pública do Cloud Storage, as URLs das malhas geográficas e os metadados de publicação.
+- O job agendado acrescenta um snapshot completo por execução ao histórico em `extracao_alteracao_locais_votacao/secoes_alteradas_2t_2026.json`. O JSON contém `snapshots`, cada item com `extracted_at` (UTC) e `rows`. As abas agrupam execuções pela data local (`America/Sao_Paulo`) e exibem a última carga do dia; as execuções intermediárias também permanecem no arquivo. Para outro destino, atualize `dataUrl` no dashboard e `storage.bucket`/`storage.object` em [pipeline-config.json](pipeline-config.json). A requisição usa `cache: no-store`.
+- Para buscar de outro servidor, altere `dataUrl` e `dataFormat`; o histórico publicado usa `snapshots`, com `extracted_at` e uma lista completa de `rows` por execução. O formato legado com `rows` ou lista JSON ainda pode ser lido como uma única carga. A origem precisa permitir CORS. Nunca inclua chaves privadas no frontend.
+- Data de publicação da lista-fonte (`gen`), versão do cadastro e datas dos turnos ficam em `metadata`. O instante da extração do dashboard é gravado automaticamente pelo job.
 - Municípios e estados são carregados da API pública de malhas do IBGE. As URLs podem ser trocadas por arquivos GeoJSON hospedados localmente; mantenha `FeatureCollection` e `properties.codarea` com o código IBGE. As malhas usam o cache HTTP normal.
-- Totais, agrupamentos e indicadores são calculados a partir do CSV recebido, com validação de colunas, números, coordenadas e seções duplicadas. Valores vazios de votos e coordenadas são tratados como ausentes.
+- Totais, agrupamentos e indicadores são calculados a partir do JSON recebido, com validação de colunas, números, coordenadas e seções duplicadas. Valores ausentes de votos e coordenadas são tratados como desconhecidos.
+- O dashboard inteiro (resumo, mapa, filtros, lista e tabela por estado) fica dentro da aba da data da carga. A primeira publicação após a mudança migra o snapshot JSON atual para o histórico usando a data de atualização do objeto no Cloud Storage.
 - O carregamento mostra estado de espera, erros e opção de tentar novamente. CSV/configuração/mapa têm limite de 30 segundos por requisição.
 
 ### organização
@@ -30,20 +29,20 @@ Também funciona no GitHub Pages, sem backend ou etapa de build: publique os arq
 - [dashboard-data.js](dashboard-data.js): leitura e transformação do CSV.
 - [tests/dashboard-data.test.js](tests/dashboard-data.test.js): testes com dados sintéticos; não leem a base real.
 
-As bibliotecas D3 e fontes tipográficas continuam vindo de CDNs. A aplicação precisa de acesso às fontes configuradas. Não existe sincronização automática com o TSE: a fonte CSV deve ser atualizada por quem mantém os dados.
+As bibliotecas D3 e fontes tipográficas continuam vindo de CDNs. O job baixa as fontes definidas em [pipeline-config.json](pipeline-config.json); quando uma fonte oficial muda de URL, atualize a configuração e publique a nova versão.
 
 ## gerar a base com Python
 
-A rotina [scripts/gerar_dados.py](scripts/gerar_dados.py) baixa a lista de alterações indicada, cruza cadastro de locais, resultados do 1º turno e municípios IBGE, e gera as mesmas 25 colunas do dashboard. Usa Python 3.11+ sem dependências externas.
+A rotina [scripts/gerar_dados.py](scripts/gerar_dados.py) baixa a lista de alterações indicada, cruza cadastro de locais, resultados do 1º turno e municípios IBGE, e gera as mesmas 25 colunas do dashboard. Usa Python 3.11+ e `uv`. Execute `uv sync` para criar `.venv` e instalar as dependências declaradas em [pyproject.toml](pyproject.toml), travadas em [uv.lock](uv.lock).
 
-Fontes e candidatos ficam em [pipeline-config.json](pipeline-config.json). O destino padrão agora é a tabela `comite-tecnologia.alteracao_locais_votacao.secoes_alteradas_2t_2026`, em **US**. Execute `python3 scripts/gerar_dados.py` para gerar e publicar o snapshot no BQ, usando a CLI já autenticada, sem ler nem substituir o CSV existente. Cada execução substitui o conteúdo da tabela.
+Fontes e candidatos ficam em [pipeline-config.json](pipeline-config.json). O destino padrão é somente o objeto JSON no bucket Cloud Storage configurado ali. `allowIncomplete` está habilitado para incluir seções com dados de enriquecimento ausentes (por exemplo, local final não encontrado), preservando os valores como nulos. Execute `uv run python scripts/gerar_dados.py` para publicar o snapshot usando ADC, sem BigQuery e sem ler nem substituir o CSV existente.
 
-Para inspecionar apenas o ZIP: `python3 scripts/gerar_dados.py --inspect`. Para exportar CSV: `python3 scripts/gerar_dados.py --destination csv --output data/secoes_novas.csv`.
+Para inspecionar apenas o ZIP: `uv run python scripts/gerar_dados.py --inspect`. Para exportar CSV: `uv run python scripts/gerar_dados.py --destination csv --output data/secoes_novas.csv`.
 
-Os enriquecimentos “Longe da urna” e snapshot de 15/10 estão **adiados**: não bloqueiam mais a geração e ficam NULL no BQ (vazios no CSV). As demais validações continuam ativas. A distância da mudança é calculada normalmente quando existem as coordenadas dos dois locais.
+O enriquecimento “Longe da urna” está **adiado**: não bloqueia a geração e fica NULL no JSON (vazio no CSV). A distância da mudança é calculada normalmente quando existem as coordenadas dos dois locais.
 
 Veja [docs/geracao-dados.md](docs/geracao-dados.md) para fontes, configuração, critérios de cruzamento, cache, publicação e testes.
-Veja [docs/bigquery.md](docs/bigquery.md) para carga BigQuery, esquema, API e leitura pelo JavaScript.
+Veja [docs/cloud-storage.md](docs/cloud-storage.md) para a publicação no Cloud Storage e o deploy do Cloud Run Job.
 
 ## números da versão original (referência estática)
 
@@ -85,6 +84,5 @@ UTF-8, separado por `;`, uma linha por seção.
 | `local_2t`, `endereco_2t`, `bairro_2t`, `lat_2t`, `lon_2t` | local de votação no 2º turno |
 | `distancia_km` | distância em linha reta entre os dois locais (vazio quando não dá para medir) |
 | `regiao_longe_da_urna` | `True` quando o local fica em região longe da urna |
-| `entrou_desde_15_10` | `True` quando a seção entrou na lista depois de 15/10 |
 | `aptos_1t`, `abstencao_1t` | aptos e abstenção no 1º turno |
 | `lula_1t`, `flavio_1t`, `outros_1t`, `brancos_1t`, `nulos_1t` | votos para presidente no 1º turno |

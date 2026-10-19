@@ -4,7 +4,6 @@
   "type": "module",
   "scripts": {
     "start": "http-server . -p 8080 -c-1",
-    "start:bq": "python3 -m scripts.servir_dashboard",
     "test": "node --test"
   },
   "devDependencies": {

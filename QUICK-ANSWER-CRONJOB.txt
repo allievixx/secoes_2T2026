@@ -1,0 +1,43 @@
+===============================================================================
+RESPOSTA: Por que tem mais abas que execuções de cronjob?
+===============================================================================
+
+O CRONJOB EXECUTA 4X POR DIA:
+  • 06:30 AM (manhã)
+  • 11:30 AM (meio-dia)
+  • 15:30 PM (tarde)
+  • 20:30 PM (noite)
+
+Zona: São Paulo (America/Sao_Paulo)
+Cron: 30 6,11,15,20 * * *
+
+===============================================================================
+
+MAS O HISTÓRICO ACUMULA!
+
+Cada execução é guardada no JSON. Não descarta, apenas acumula snapshots.
+
+Se você vê 12 abas:
+  Dia 3 (hoje):     3 abas (14:00 manual + 11:30 cronjob + 06:30 cronjob)
+  Dia 2 (ontem):    4 abas (20:30 + 15:30 + 11:30 + 06:30 cronjob)
+  Dia 1 (anteontem):4 abas (20:30 + 15:30 + 11:30 + 06:30 cronjob)
+  
+  Total = 11 abas + 1 eventual execução manual = 12
+
+===============================================================================
+
+POR QUE GUARDAR HISTÓRICO?
+
+✓ Sua nova feature de "cargas por horário" precisa disso!
+✓ Permite VER como os dados mudaram ao longo do dia
+✓ Auditoria e rastreabilidade
+✓ Comparar extrações
+
+===============================================================================
+
+ARQUIVO DE REFERÊNCIA: docs/cloud-storage.md
+
+PARA MUDAR A FREQUÊNCIA:
+  gcloud scheduler jobs update secoes-etl-4x-daily --schedule="30 6,12,18 * * *"
+
+===============================================================================

@@ -121,29 +121,26 @@ class PipelineTest(unittest.TestCase):
 
     def test_build_rows_full_join(self):
         args = self.fixtures()
-        rows, issues = build_rows(*args, {}, {("AL", "27596", 20, "20"):5.0})
+        rows, issues = build_rows(*args, {("AL", "27596", 20, "20"):5.0})
         self.assertFalse(issues)
         self.assertEqual(list(rows[0]), FIELDS)
         self.assertEqual(rows[0]["eleitores"], 400)
         self.assertEqual(rows[0]["aptos_1t"], 350)
-        self.assertTrue(rows[0]["entrou_desde_15_10"])
         self.assertTrue(rows[0]["regiao_longe_da_urna"])
         self.assertEqual(rows[0]["distancia_km"], 1.112)
         self.assertEqual(rows[0]["endereco_1t"], "Rua A; nº 1")
 
     def test_old_local_without_sections_has_no_invented_coordinates(self):
         args = self.fixtures(retain_old=False)
-        rows, issues = build_rows(*args, set(args[0]), {("AL", "27596", 20, "20"):1.0})
+        rows, issues = build_rows(*args, {("AL", "27596", 20, "20"):1.0})
         self.assertFalse(issues)
         self.assertEqual(rows[0]["lat_1t"], "")
         self.assertEqual(rows[0]["distancia_km"], "")
         self.assertEqual(rows[0]["endereco_1t"], "Rua A; nº 1")
-        self.assertFalse(rows[0]["entrou_desde_15_10"])
 
     def test_missing_enrichments_stay_unknown_not_false(self):
-        rows, issues = build_rows(*self.fixtures(), None, {})
+        rows, issues = build_rows(*self.fixtures(), {})
         self.assertFalse(issues)
-        self.assertEqual(rows[0]["entrou_desde_15_10"], "")
         self.assertEqual(rows[0]["regiao_longe_da_urna"], "")
 
     def test_results_turn_office_filter_and_duplicate_protection(self):
@@ -163,16 +160,15 @@ class PipelineTest(unittest.TestCase):
 
     def test_cli_end_to_end_and_overwrite_protection(self):
         self.source("changes.zip", [changed()])
-        self.source("baseline.zip", [changed("2")])
         self.source("registry.zip", [registry(), registry("2", old=True)])
         self.source("votes.zip", [election(NR_VOTAVEL=n, QT_VOTOS=q) for n,q in [("13","150"),("22","100"),("12","20"),("95","5"),("96","5")]])
         self.source("details.zip", [election(QT_APTOS="350", QT_ABSTENCOES="70", QT_VOTOS_BRANCOS="5", QT_VOTOS_NULOS="5")])
         (self.root / "ibge.json").write_text(json.dumps(municipalities()), encoding="utf-8")
         self.source("long.csv", [{"UF":"AL", "CD_MUNICIPIO":"27596", "ZONA":"20", "NR_LOCAL_VOTACAO":"20", "DISTANCIA_MEDIA_KM":"5"}])
         config = self.root / "config.json"
-        config.write_text(json.dumps({"sources":{
+        config.write_text(json.dumps({"storage":{"bucket":"test-bucket","object":"snapshot.json"},"sources":{
             "changes":"changes.zip", "registry":"registry.zip", "votes":"votes.zip", "details":"details.zip",
-            "municipalities":"ibge.json", "baseline":"baseline.zip", "longDistance":"long.csv",
+            "municipalities":"ibge.json", "longDistance":"long.csv",
         }}), encoding="utf-8")
         output, report = self.root / "out.csv", self.root / "report.json"
         args = ["--destination","csv","--config",str(config),"--output",str(output),"--report",str(report)]
@@ -187,17 +183,35 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(main(args), 1)
         self.assertEqual(output.read_bytes(), original)
         self.assertTrue(json.loads(report.read_text())["publicado"])
-        # BigQuery é o padrão e não depende dos dois enriquecimentos adiados.
+        # O destino padrão é Cloud Storage e não depende dos dois enriquecimentos adiados.
         content = json.loads(config.read_text())
-        content["sources"]["baseline"] = None
         content["sources"]["longDistance"] = None
         config.write_text(json.dumps(content),encoding="utf-8")
-        with patch("scripts.gerar_dados.publish",return_value="comite-tecnologia.alteracao_locais_votacao.secoes_alteradas_2t_2026") as mocked:
+        with patch("scripts.gerar_dados.publish_json",return_value="test-bucket/snapshot.json") as mocked_json:
             self.assertEqual(main(["--config",str(config),"--report",str(report)]),0)
-            self.assertEqual(mocked.call_args.args[0][0]["regiao_longe_da_urna"],"")
-            self.assertEqual(mocked.call_args.args[0][0]["entrou_desde_15_10"],"")
+            self.assertEqual(mocked_json.call_args.args[0][0]["regiao_longe_da_urna"],"")
+            self.assertEqual(mocked_json.call_count,1)
             self.assertEqual(output.read_bytes(),original)
-            self.assertEqual(json.loads(report.read_text())["destination"],"bigquery")
+            saved_report = json.loads(report.read_text())
+            self.assertEqual(mocked_json.call_args.args[3].isoformat(),saved_report["generated_at"])
+            self.assertEqual(saved_report["destination"],"storage")
+            self.assertEqual(saved_report["storage_object"],"test-bucket/snapshot.json")
+            self.assertEqual(saved_report["dashboard_data_url"],"https://storage.googleapis.com/test-bucket/snapshot.json")
+
+        content["allowIncomplete"] = True
+        config.write_text(json.dumps(content), encoding="utf-8")
+        incomplete_row = dict.fromkeys(FIELDS, "") | {
+            "uf":"PE", "municipio":"Recife", "cd_ibge":2611606, "zona":3,
+            "secao":735, "eleitores":250,
+        }
+        with patch("scripts.gerar_dados.build_rows",return_value=([incomplete_row],["Missing final location"])), \
+             patch("scripts.gerar_dados.publish_json",return_value="test-bucket/snapshot.json") as mocked_json:
+            self.assertEqual(main(["--config",str(config),"--report",str(report)]),0)
+            self.assertEqual(mocked_json.call_args.args[0],[incomplete_row])
+            saved_report = json.loads(report.read_text())
+            self.assertTrue(saved_report["allow_incomplete"])
+            self.assertEqual(saved_report["pendencias"],["Missing final location"])
+            self.assertTrue(saved_report["publicado"])
 
 
 if __name__ == "__main__":
