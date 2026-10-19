@@ -35,9 +35,6 @@ function initializeNavigation() {
     event.preventDefault();
     const el = $(a.dataset.sec);
     if (el.tagName === "DETAILS") el.open = true;
-    if (a.dataset.sec === "sec-timeline" && globalThis.allSnapshots) {
-      renderTimeline(globalThis.allSnapshots);
-    }
     hold = Date.now() + 1200;
     el.scrollIntoView({ behavior:"smooth", block:"start" });
     setNav(a.dataset.sec);
@@ -50,7 +47,7 @@ function initializeNavigation() {
   window.addEventListener("scroll", () => requestAnimationFrame(() => {
     if (Date.now() < hold) return;
     let current = "top";
-    for (const id of ["top", "sec-mapa", "sec-lista", "sec-uf", "sec-timeline", "sec-sobre"]) {
+    for (const id of ["top", "sec-mapa", "sec-lista", "sec-uf", "sec-sobre"]) {
       if ($(id).getBoundingClientRect().top - 84 < innerHeight * .35) current = id;
     }
     setNav(current);
@@ -386,6 +383,37 @@ async function start() {
     let activeDay = days[0].key;
     let activeLoad = null;
     
+    const activateTimeline = () => {
+      activeDay = null;
+      activeLoad = null;
+      
+      for (const tab of tabs.querySelectorAll('[role="tab"]')) {
+        const selected = tab.dataset.timeline === "true";
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+      }
+      
+      panel.innerHTML = panelTemplate;
+      panel.setAttribute("aria-labelledby", "snapshot-tab-timeline");
+      
+      const timelineDiv = document.createElement("div");
+      timelineDiv.style.marginTop = "20px";
+      const title = document.createElement("h3");
+      title.textContent = "Linha do tempo";
+      title.style.margin = "0 0 12px 0";
+      const subtitle = document.createElement("div");
+      subtitle.className = "facts";
+      subtitle.style.fontSize = ".82rem";
+      subtitle.textContent = "Evolução dos dados ao longo das extrações. Compare como os dados mudaram entre as diferentes cargas do dia.";
+      
+      timelineDiv.appendChild(title);
+      timelineDiv.appendChild(subtitle);
+      timelineDiv.appendChild($("timeline-charts"));
+      panel.appendChild(timelineDiv);
+      
+      renderTimeline(globalThis.allSnapshots);
+    };
+    
     const activate = (day, loadIndex = 0) => {
       activeDay = day;
       const dayData = days.find(d => d.key === day);
@@ -462,6 +490,29 @@ async function start() {
       
       tabs.append(tabContainer);
     });
+    
+    const timelineTab = $("snapshot-tab-timeline");
+    if (timelineTab) {
+      timelineTab.onclick = () => activateTimeline();
+      timelineTab.onkeydown = event => {
+        const dayCount = days.length;
+        let next = null;
+        if (event.key === "ArrowRight") next = 0;
+        else if (event.key === "ArrowLeft") next = dayCount - 1;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = "timeline";
+        else return;
+        event.preventDefault();
+        if (next === "timeline") {
+          activateTimeline();
+          timelineTab.focus();
+        } else {
+          activate(days[next].key, 0);
+          $(`snapshot-tab-${days[next].key}`).focus();
+        }
+      };
+    }
+    
     activate(activeDay, 0);
     $("dashboard").setAttribute("aria-busy","false");$("load-status").hidden=true;
   } catch(error) {

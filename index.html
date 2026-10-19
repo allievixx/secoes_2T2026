@@ -30,7 +30,9 @@
 </section>
 <noscript><p>Ative o JavaScript para carregar os dados e visualizar o dashboard.</p></noscript>
 <div class="wrap" id="dashboard" hidden aria-busy="true">
-  <div class="snapshot-tabs" id="snapshot-tabs" role="tablist" aria-label="Versões diárias do dashboard"></div>
+  <div class="snapshot-tabs" id="snapshot-tabs" role="tablist" aria-label="Versões diárias do dashboard">
+    <button type="button" class="snapshot-tab" id="snapshot-tab-timeline" data-timeline="true" role="tab" aria-controls="snapshot-panel" aria-selected="false" tabindex="-1">Linha do tempo</button>
+  </div>
   <div class="snapshot-panel" id="snapshot-panel" role="tabpanel">
   <section class="card" id="top">
     <div><div class="eyebrow" id="scope"></div><h2 id="headline"></h2></div>
@@ -72,11 +74,7 @@
     <div class="facts" style="font-size:.82rem">Segue os filtros da página, exceto o de estado. Toque num estado para filtrar a página por ele. Percentuais de Lula e Flávio sobre os votos válidos do 1º turno.</div>
     <div class="tblw"><table id="uftab"></table></div>
   </section>
-  <section class="card" id="sec-timeline">
-    <div><div class="eyebrow">Histórico de cargas</div><h2>Linha do tempo</h2></div>
-    <div class="facts" style="font-size:.82rem">Evolução dos dados ao longo das extrações. Compare como os dados mudaram entre as diferentes cargas do dia.</div>
-    <div id="timeline-charts"></div>
-  </section>
+  <div id="timeline-charts" hidden></div>
   <details id="sec-sobre">
     <summary>Como ler</summary>
     <p>Fonte: lista de seções eleitorais alteradas no 2º turno do TSE (<i>secoes_eleitorais_alteradas_2t-pais_2026</i>), publicada em <span id="gen"></span>, com <span id="source-sections"></span> seções. "Eleitores" é a coluna <i>qt_eleitores</i> dessa lista. Endereços e coordenadas vêm da base de locais de votação do TSE (<i>eleitorado_local_votacao_2026</i>, versão de <span id="registry-date"></span>). As bases podem apresentar totais de eleitores diferentes.</p>
