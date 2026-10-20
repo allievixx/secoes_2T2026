@@ -1,6 +1,6 @@
 import { $maybe } from "../utils/dom";
 
-const SECTION_IDS = ["top", "sec-mapa", "sec-lista", "sec-uf", "sec-timeline", "sec-sobre"];
+const SECTION_IDS = ["top", "sec-mapa", "sec-lista", "sec-uf", "sec-timeline", "sec-dados", "sec-sobre"];
 
 /** Destaque do link ativo no header, com rolagem suave e acompanhamento do scroll. */
 export function initializeNavigation(): void {
@@ -18,7 +18,18 @@ export function initializeNavigation(): void {
     a.addEventListener("click", event => {
       event.preventDefault();
       const id = a.dataset.sec ?? "top";
-      const el = $maybe(id);
+      let el = $maybe(id);
+
+      // Se o elemento não estiver no DOM (ex.: usuário na aba Linha do tempo clicando em Mapa ou Dados),
+      // ativa a aba diária mais recente para remontar o painel completo.
+      if (!el) {
+        const dayTab = document.querySelector<HTMLButtonElement>('.snapshot-day .snapshot-tab');
+        if (dayTab) {
+          dayTab.click();
+          el = $maybe(id);
+        }
+      }
+
       if (el instanceof HTMLDetailsElement) el.open = true;
       // Enquanto a rolagem suave acontece, o scroll listener não deve "roubar" o destaque.
       holdUntil = Date.now() + 1200;

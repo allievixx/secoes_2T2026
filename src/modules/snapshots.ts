@@ -3,7 +3,7 @@ import { $, $maybe } from "../utils/dom";
 import { timeLabelOf } from "../utils/format";
 import { initializeDashboard } from "./dashboard";
 import { groupByDay, latestLoadIndex } from "./snapshot-days";
-import { renderTimeline } from "./timeline";
+import { renderDedicatedTimelineView, renderTimeline } from "./timeline";
 
 const timeLabel = (snapshot: Snapshot) => snapshot.extractedAt ? timeLabelOf(snapshot.extractedAt) : "Único";
 
@@ -32,22 +32,10 @@ export function initializeSnapshotTabs(snapshots: Snapshot[], municipalities: Ar
 
   const activateTimeline = () => {
     selectTab(tab => tab.dataset.timeline === "true");
-    panel.innerHTML = panelTemplate;
     panel.setAttribute("aria-labelledby", "snapshot-tab-timeline");
-
-    const wrapper = document.createElement("div");
-    wrapper.style.marginTop = "20px";
-    const title = document.createElement("h3");
-    title.textContent = "Linha do tempo";
-    title.style.margin = "0 0 12px 0";
-    const subtitle = document.createElement("div");
-    subtitle.className = "facts";
-    subtitle.style.fontSize = ".82rem";
-    subtitle.textContent = "Evolução dos dados ao longo das extrações. Compare como os dados mudaram entre as diferentes cargas do dia.";
-    wrapper.append(title, subtitle, $("timeline-charts"));
-    panel.appendChild(wrapper);
-
-    renderTimeline(snapshots);
+    renderDedicatedTimelineView(panel, snapshots, () => {
+      activateDay(days[days.length - 1].key);
+    });
   };
 
   /** Ativa um dia; sem índice explícito, abre a carga mais recente dele. */
@@ -69,6 +57,8 @@ export function initializeSnapshotTabs(snapshots: Snapshot[], municipalities: Ar
       ...snapshot.data,
       meta: { ...snapshot.data.meta, extractionDate, gen },
     }, municipalities, states);
+
+    renderTimeline(snapshots);
   };
 
   const focusDay = (index: number) => {

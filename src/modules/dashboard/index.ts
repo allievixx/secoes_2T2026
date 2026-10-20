@@ -8,6 +8,7 @@ import { areaCode, createMap } from "./map";
 import { DashboardState, enrichGroups } from "./state";
 import { renderSummary } from "./summary";
 import { renderUFTable } from "./uf-table";
+import { renderDataSection } from "./data-view";
 
 /**
  * Monta uma carga do dashboard dentro do painel atual. É chamado de novo a cada troca de aba,
@@ -29,6 +30,7 @@ export function initializeDashboard(data: DashboardData, municipalities: AreaCol
     renderCard(state, clearSelection);
     renderSummary(state);
     renderUFTable(state, setUF);
+    renderDataSection(state, g => pick(g, true));
   }
 
   function clearSelection() {

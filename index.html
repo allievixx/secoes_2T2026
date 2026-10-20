@@ -53,6 +53,13 @@
           <span class="lg-only">Linha do tempo</span>
           <span class="sm-only">Timeline</span>
         </a>
+        <a href="#sec-dados" data-sec="sec-dados">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+          <span class="lg-only">Baixar dados</span>
+          <span class="sm-only">Dados</span>
+        </a>
         <a href="#sec-sobre" data-sec="sec-sobre">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>
@@ -165,7 +172,67 @@
 
       <!-- Timeline Section -->
       <section class="card" id="sec-timeline">
+        <div>
+          <div class="eyebrow">Série Histórica</div>
+          <h2>Linha do tempo das extrações</h2>
+        </div>
+        <p class="lead">Evolução dos dados ao longo das extrações. Compare como os totais de seções, eleitores e aptos mudaram entre as diferentes cargas divulgadas pelo TSE.</p>
         <div id="timeline-charts"></div>
+      </section>
+
+      <!-- Data View and Download Section -->
+      <section class="card" id="sec-dados">
+        <div class="data-header">
+          <div>
+            <div class="eyebrow">Dados Abertos</div>
+            <h2>Ver e baixar dados das seções alteradas</h2>
+          </div>
+          <div class="data-actions">
+            <button type="button" class="btn-download" id="btn-download-csv" title="Baixar todas as seções alteradas em CSV para Excel ou Google Sheets">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" width="18" height="18">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+              <span>Baixar CSV</span>
+            </button>
+            <button type="button" class="btn-download btn-secondary" id="btn-download-json" title="Baixar todas as seções alteradas em formato JSON">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" width="18" height="18">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+              <span>Baixar JSON</span>
+            </button>
+          </div>
+        </div>
+        <p class="lead">Consulte a relação completa de seções eleitorais que tiveram alteração de local de votação para o 2º turno e faça o download da base completa para análises e cruzamentos.</p>
+
+        <div class="data-filter-bar">
+          <input type="text" id="data-search" placeholder="Filtrar por município, zona, seção ou local…" aria-label="Filtrar seções na tabela">
+          <select id="data-uf-filter" aria-label="Filtrar por estado">
+            <option value="">Todos os estados</option>
+          </select>
+          <span class="data-counter" id="data-counter"></span>
+        </div>
+
+        <div class="tblw">
+          <table class="data-table" id="data-table">
+            <thead>
+              <tr>
+                <th style="text-align:left">UF</th>
+                <th style="text-align:left">Município</th>
+                <th style="text-align:center">Zona</th>
+                <th style="text-align:center">Seção</th>
+                <th style="text-align:right">Eleitores</th>
+                <th style="text-align:left">Local 1º Turno (Original)</th>
+                <th style="text-align:left">Local 2º Turno (Novo)</th>
+                <th style="text-align:right">Distância</th>
+                <th style="text-align:center">1º Turno</th>
+              </tr>
+            </thead>
+            <tbody id="data-tbody"></tbody>
+          </table>
+        </div>
+        <div class="data-pagination" id="data-pagination">
+          <button type="button" class="more" id="data-load-more">Mostrar mais seções</button>
+        </div>
       </section>
 
       <!-- About Section -->
