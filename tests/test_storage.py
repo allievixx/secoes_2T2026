@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from scripts.gerar_dados import FIELDS
-from scripts.storage_io import StorageError, publish_json, typed_row
+from scripts.storage_io import StorageError, archive_source, archive_sources, publish_json, typed_row
 
 
 def sample_row():
@@ -147,6 +147,47 @@ class StorageTest(unittest.TestCase):
             self.upload.side_effect = GoogleAPIError("permission denied")
             with self.assertRaisesRegex(StorageError, "permission denied"):
                 publish_json([sample_row()], FIELDS, {"bucket":"test-bucket"}, extracted_at)
+
+    def source_file(self):
+        import tempfile
+        from pathlib import Path
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "abc123-secoes_eleitorais_alteradas_2t-pais_2026.csv.zip"
+        path.write_bytes(b"PK\x03\x04zip")
+        return path
+
+    def test_archive_source_uploads_one_copy_per_version(self):
+        version = {"url": "https://cdn.tse.jus.br/x/secoes_eleitorais_alteradas_2t-pais_2026.csv.zip", "sha256": "ab" * 32,
+                   "last_modified": "Mon, 19 Oct 2026 14:12:23 GMT", "etag": '"3509"', "downloaded_at": "2026-10-20T18:00:00+00:00"}
+        self.bucket.list_blobs = Mock(return_value=[])
+        with patch.dict("sys.modules", self.google_modules):
+            result = archive_source(self.source_file(), "changes", version, {"bucket": "test-bucket"})
+        self.assertEqual(result, "test-bucket/fontes/changes/20261019T141223Z-abababababab-secoes_eleitorais_alteradas_2t-pais_2026.csv.zip")
+        self.bucket.list_blobs.assert_called_once_with(prefix="fontes/changes/")
+        kwargs = self.blob.upload_from_filename.call_args.kwargs
+        self.assertEqual(kwargs["if_generation_match"], 0)
+        self.assertEqual(kwargs["content_type"], "application/zip")
+        self.assertEqual(self.blob.metadata["sha256"], "ab" * 32)
+        self.assertEqual(self.blob.metadata["source_url"], version["url"])
+        self.assertIn("immutable", self.blob.cache_control)
+
+    def test_archive_source_skips_versions_already_stored(self):
+        existing = Mock(name="fontes/changes/20261018T000000Z-abababababab-old.zip", metadata={"sha256": "ab" * 32})
+        existing.name = "fontes/changes/20261018T000000Z-abababababab-old.zip"
+        self.bucket.list_blobs = Mock(return_value=[existing])
+        with patch.dict("sys.modules", self.google_modules):
+            result = archive_source(self.source_file(), "changes", {"sha256": "ab" * 32}, {"bucket": "test-bucket", "archivePrefix": "fontes"})
+        self.assertEqual(result, "test-bucket/" + existing.name)
+        self.blob.upload_from_filename.assert_not_called()
+
+    def test_archive_source_requires_sha256_and_valid_config(self):
+        with self.assertRaisesRegex(StorageError, "SHA-256"):
+            archive_source(self.source_file(), "changes", {}, {"bucket": "test-bucket"})
+        with self.assertRaisesRegex(StorageError, "archiveSources"):
+            archive_sources({"archiveSources": "changes"})
+        self.assertEqual(archive_sources({}), ("fontes", ["changes"]))
+        self.assertEqual(archive_sources({"archivePrefix": "/raw/", "archiveSources": []}), ("raw", []))
 
 
 if __name__ == "__main__":

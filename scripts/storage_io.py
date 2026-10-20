@@ -6,8 +6,10 @@ import json
 import math
 import re
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 INTEGER_FIELDS = {
     "cd_ibge", "zona", "secao", "eleitores", "aptos_1t", "abstencao_1t",
@@ -15,6 +17,7 @@ INTEGER_FIELDS = {
 }
 FLOAT_FIELDS = {"lat_1t", "lon_1t", "lat_2t", "lon_2t", "distancia_km"}
 BOOLEAN_FIELDS = {"regiao_longe_da_urna"}
+CONTENT_TYPES = {".zip": "application/zip", ".csv": "text/csv; charset=utf-8", ".json": "application/json; charset=utf-8"}
 
 
 class StorageError(RuntimeError):
@@ -33,6 +36,64 @@ def target(config: dict[str, Any]) -> tuple[str, str]:
 
 def public_url(bucket_name: str, object_name: str) -> str:
     return f"https://storage.googleapis.com/{bucket_name}/{quote(object_name, safe='/')}"
+
+
+def archive_sources(config: dict[str, Any]) -> tuple[str, list[str]]:
+    """Prefixo e nomes das fontes cujas cópias são guardadas no bucket; por padrão só a lista de alterações."""
+    prefix = str(config.get("archivePrefix", "fontes")).strip("/")
+    names = config.get("archiveSources", ["changes"])
+    if not prefix or not isinstance(names, list) or any(not isinstance(n, str) or not n for n in names):
+        raise StorageError("archivePrefix deve ser um texto e archiveSources uma lista de nomes de fontes")
+    return prefix, names
+
+
+def _version_stamp(version: dict[str, Any]) -> str:
+    """Instante da versão da fonte, em UTC compacto: Last-Modified do TSE ou, na falta, o momento do download."""
+    for key, parse in (("last_modified", parsedate_to_datetime), ("downloaded_at", datetime.fromisoformat)):
+        value = version.get(key)
+        if value:
+            try:
+                return parse(value).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            except (TypeError, ValueError):
+                continue
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def archive_source(path: Path, name: str, version: dict[str, Any], config: dict[str, Any]) -> str:
+    """Guarda uma cópia do arquivo-fonte no bucket, uma por versão (SHA-256); devolve o caminho gs://-relativo."""
+    bucket_name, _ = target(config)
+    prefix, _ = archive_sources(config)
+    sha256 = str(version.get("sha256") or "")
+    if len(sha256) != 64:
+        raise StorageError(f"Fonte {name} sem SHA-256; cópia não arquivada")
+    folder = f"{prefix}/{name}/"
+    basename = Path(urlparse(str(version.get("url") or "")).path).name or path.name
+    object_name = f"{folder}{_version_stamp(version)}-{sha256[:12]}-{basename}"
+
+    try:
+        from google.auth.exceptions import GoogleAuthError
+        from google.api_core.exceptions import GoogleAPIError
+        from google.cloud import storage
+    except ImportError as exc:
+        raise StorageError("Dependência google-cloud-storage não instalada") from exc
+
+    try:
+        bucket = storage.Client().bucket(bucket_name)
+        # Mesma versão já guardada (talvez com outro carimbo de data): não duplica.
+        for blob in bucket.list_blobs(prefix=folder):
+            if (blob.metadata or {}).get("sha256") == sha256:
+                return f"{bucket_name}/{blob.name}"
+        blob = bucket.blob(object_name)
+        blob.metadata = {k: str(v) for k, v in {
+            "sha256": sha256, "source_url": version.get("url"), "last_modified": version.get("last_modified"),
+            "etag": version.get("etag"), "downloaded_at": version.get("downloaded_at"),
+        }.items() if v}
+        blob.cache_control = "public, max-age=31536000, immutable"
+        blob.upload_from_filename(str(path), content_type=CONTENT_TYPES.get(Path(basename).suffix.lower(), "application/octet-stream"),
+                                  checksum="crc32c", if_generation_match=0)
+    except (GoogleAPIError, GoogleAuthError) as exc:
+        raise StorageError(f"Falha ao arquivar fonte {name} em gs://{bucket_name}/{object_name}: {exc}") from exc
+    return f"{bucket_name}/{object_name}"
 
 
 def typed_row(row: dict[str, Any], fields: list[str]) -> dict[str, Any]:

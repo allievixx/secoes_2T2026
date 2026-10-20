@@ -5,7 +5,9 @@
   "allowIncomplete": true,
   "storage": {
     "bucket": "extracao_alteracao_locais_votacao",
-    "object": "secoes_alteradas_2t_2026.json"
+    "object": "secoes_alteradas_2t_2026.json",
+    "archivePrefix": "fontes",
+    "archiveSources": ["changes"]
   },
   "sources": {
     "changes": "https://cdn.tse.jus.br/estatistica/sead/odsele/arquivos_gerados/eleitorado_eleicao_2026/20261019_105000/71d5e6b06fa299337b05541127926cd7/secoes_eleitorais_alteradas_2t-pais_2026.csv.zip",

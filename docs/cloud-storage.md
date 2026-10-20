@@ -8,6 +8,14 @@ O dashboard do GitHub Pages não consulta BigQuery nem usa credenciais Google. A
 
 O bucket e o objeto são definidos no bloco `storage` de [pipeline-config.json](../pipeline-config.json). A rotina só faz upload depois que geração e validação terminam. Uma falha de upload deixa o objeto anterior intacto. Linhas vazias são recusadas. Cada execução guarda a extração completa com seu instante UTC, sem descartar execuções anteriores. O formato legado `{"rows":[...]}` é migrado no primeiro upload, usando a data de atualização do objeto no Cloud Storage.
 
+### Cópias das fontes do TSE
+
+O TSE sobrescreve seus ZIPs na mesma URL, então a versão usada em cada carga se perderia. Antes de publicar o snapshot, a rotina arquiva no bucket uma cópia dos arquivos-fonte listados em `storage.archiveSources` (padrão `["changes"]`, a lista de seções alteradas; o cadastro de locais tem ~170 MB por versão e não é arquivado por padrão), sob `storage.archivePrefix` (padrão `fontes`):
+
+`gs://extracao_alteracao_locais_votacao/fontes/changes/<Last-Modified em UTC>-<sha256[:12]>-secoes_eleitorais_alteradas_2t-pais_2026.csv.zip`
+
+Há uma cópia por versão: se um objeto com o mesmo SHA-256 (metadado `sha256`) já existe na pasta, nada é reenviado. Os metadados do objeto guardam URL de origem, `Last-Modified`, `ETag` e instante do download. O caminho arquivado entra em `sources.<fonte>.archived` no snapshot e em `source_versions` no relatório. Uma falha no arquivamento é registrada em `falhas_arquivamento` no relatório e no log, mas não impede a publicação do dashboard. Como o bucket é público, as cópias também são — são dados públicos do TSE.
+
 [dashboard-config.json](../dashboard-config.json) aponta para a URL pública do objeto. O bucket permite leitura pública e CORS `GET` para o GitHub Pages e para os servidores locais `http://localhost:8080` e `http://127.0.0.1:8080`, configurados em [storage-cors.json](../storage-cors.json). A configuração atual do bucket informa `public_access_prevention: inherited`; a política efetiva do projeto não impõe prevenção, mas confirme esse estado se a política da organização mudar. Não publique dados que não possam ser públicos.
 
 ## Ambiente local

@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 if __package__:
-    from .storage_io import StorageError, public_url, publish_json, target as storage_target
+    from .storage_io import StorageError, archive_source, archive_sources, public_url, publish_json, target as storage_target
 else:
-    from storage_io import StorageError, public_url, publish_json, target as storage_target
+    from storage_io import StorageError, archive_source, archive_sources, public_url, publish_json, target as storage_target
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("gerar_dados")
@@ -483,6 +483,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_incomplete = args.allow_incomplete or configured_allow_incomplete
         if args.destination in {"storage", "both"}:
             storage_target(config.get("storage", {}))
+            archive_sources(config.get("storage", {}))
         base, encoding, year = args.config.resolve().parent, config.get("encoding", "cp1252"), int(config.get("year", 2026))
         sources = config["sources"]
         source_paths: dict[str, Path] = {}
@@ -530,8 +531,20 @@ def main(argv: list[str] | None = None) -> int:
         if issues and not allow_incomplete:
             raise DataError(f"{len(issues)} pendências; saída preservada. Consulte {args.report}")
         if args.destination in {"storage", "both"}:
-            report["storage_object"] = publish_json(rows, FIELDS, config.get("storage", {}), generated_at, source_versions)
-            bucket, object_name = storage_target(config.get("storage", {}))
+            storage_config = config.get("storage", {})
+            # Cópia da fonte bruta por versão: o TSE sobrescreve a URL, e sem isso a versão usada se perde.
+            _, archive_names = archive_sources(storage_config)
+            for name in archive_names:
+                if name not in source_paths:
+                    continue
+                try:
+                    source_versions[name]["archived"] = archive_source(source_paths[name], name, source_versions[name], storage_config)
+                    LOGGER.info("Fonte %s arquivada em %s", name, source_versions[name]["archived"])
+                except StorageError as exc:
+                    LOGGER.error("%s", exc)
+                    report.setdefault("falhas_arquivamento", []).append(str(exc))
+            report["storage_object"] = publish_json(rows, FIELDS, storage_config, generated_at, source_versions)
+            bucket, object_name = storage_target(storage_config)
             report["dashboard_data_url"] = public_url(bucket, object_name)
             LOGGER.info("Publicado snapshot JSON em %s", report["storage_object"])
         if write_csv:
