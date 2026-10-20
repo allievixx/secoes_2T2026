@@ -4,3 +4,9 @@ node_modules/
 __pycache__/
 *.py[cod]
 data/geracao-relatorio.json
+sample-data.json
+dist/
+.DS_Store
+*.log
+.env
+.env.local

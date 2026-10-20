@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadDashboardData, prepareDashboardData } from "../dashboard-data.js";
+import { loadDashboardData, prepareDashboardData } from "../src/data/dashboard-data.js";
 
 // Dados inteiramente sintéticos; estes testes nunca abrem o CSV do projeto.
 const fixture = overrides => ({

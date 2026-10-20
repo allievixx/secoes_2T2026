@@ -6,9 +6,9 @@ a aplicação mantém o mapa, resumo, filtros, lista e tabela por estado. os dad
 
 ## executar
 
-Requer Node.js 20 ou superior. Instale as dependências com `npm install` e inicie com `npm start`. Abra http://localhost:8080. Para executar os testes, use `npm test`.
+Requer Node.js 20 ou superior. Instale as dependências com `npm install` e inicie o servidor de desenvolvimento com `npm run dev` (Vite, com recarga automática). Abra http://localhost:8080. Para executar os testes, use `npm test`; para checar os tipos, `npm run typecheck`.
 
-Também funciona no GitHub Pages, sem backend ou etapa de build: publique os arquivos estáticos da raiz. O dashboard carrega o snapshot JSON público no Cloud Storage; credenciais Google não ficam no navegador. Abrir o HTML diretamente por `file://` não funciona, pois o navegador restringe o carregamento de módulos e requisições locais.
+Para publicar (GitHub Pages ou qualquer hospedagem estática), gere a build com `npm run build` e publique a pasta `dist/`. No GitHub Pages isso é automático: o workflow [.github/workflows/pages.yml](.github/workflows/pages.yml) roda typecheck, testes e build a cada push na `main` e publica `dist/` em https://persichetta.github.io/secoes_2T2026/. A build já inclui `dashboard-config.json`; os dados continuam sendo buscados em runtime do Cloud Storage — não há backend, e credenciais Google não ficam no navegador. `npm run preview` serve a build localmente. Abrir o HTML diretamente por `file://` não funciona, pois o navegador restringe o carregamento de módulos e requisições locais.
 
 ## fontes dinâmicas e atualização
 
@@ -23,13 +23,20 @@ Também funciona no GitHub Pages, sem backend ou etapa de build: publique os arq
 
 ### organização
 
+O frontend é TypeScript empacotado pelo [Vite](https://vitejs.dev/); o D3 vem do npm e entra na build.
+
 - [index.html](index.html): estrutura da página, sem dados embutidos.
 - [styles.css](styles.css): visual e responsividade.
-- [app.js](app.js): inicialização, mapa e interações.
-- [dashboard-data.js](dashboard-data.js): leitura e transformação do CSV.
+- [src/main.ts](src/main.ts): carrega configuração, dados e malhas; trata erros de carregamento.
+- [src/modules/snapshots.ts](src/modules/snapshots.ts): abas por dia de extração e aba Linha do tempo.
+- [src/modules/dashboard/](src/modules/dashboard/): uma carga do dashboard — `state.ts` (filtros e seleção), `map.ts` (mapa D3 e zoom), `summary.ts`, `card.ts`, `list.ts`, `uf-table.ts` e `index.ts` (controles e ciclo de render).
+- [src/modules/timeline.ts](src/modules/timeline.ts): gráficos de evolução entre extrações.
+- [src/modules/navigation.ts](src/modules/navigation.ts): destaque da seção ativa no header.
+- [src/data/dashboard-data.js](src/data/dashboard-data.js): leitura e validação da fonte (CSV ou JSON com `snapshots`), com tipos em `dashboard-data.d.ts`.
+- [src/utils/](src/utils/): formatação, códigos de UF, `fetch` com timeout e helpers de DOM.
 - [tests/dashboard-data.test.js](tests/dashboard-data.test.js): testes com dados sintéticos; não leem a base real.
 
-As bibliotecas D3 e fontes tipográficas continuam vindo de CDNs. O job baixa as fontes definidas em [pipeline-config.json](pipeline-config.json); quando uma fonte oficial muda de URL, atualize a configuração e publique a nova versão.
+As fontes tipográficas continuam vindo de CDN. O job baixa as fontes definidas em [pipeline-config.json](pipeline-config.json); quando uma fonte oficial muda de URL, atualize a configuração e publique a nova versão.
 
 ## gerar a base com Python
 
