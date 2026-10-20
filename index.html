@@ -32,6 +32,13 @@
           </svg>
           <span>Mapa</span>
         </a>
+        <a href="#sec-dados" data-sec="sec-dados">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+          <span class="lg-only">Baixar dados</span>
+          <span class="sm-only">Dados</span>
+        </a>
         <a href="#sec-lista" data-sec="sec-lista">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>
@@ -52,13 +59,6 @@
           </svg>
           <span class="lg-only">Linha do tempo</span>
           <span class="sm-only">Timeline</span>
-        </a>
-        <a href="#sec-dados" data-sec="sec-dados">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
-          </svg>
-          <span class="lg-only">Baixar dados</span>
-          <span class="sm-only">Dados</span>
         </a>
         <a href="#sec-sobre" data-sec="sec-sobre">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -150,37 +150,7 @@
       <!-- Selected Section Card -->
       <section class="card" id="card" aria-live="polite"></section>
 
-      <!-- Changes List Section -->
-      <section class="card" id="sec-lista">
-        <div>
-          <div class="eyebrow" id="listscope">Brasil</div>
-          <h2>Mudanças de local</h2>
-        </div>
-        <div class="rows" id="list"></div>
-        <button type="button" class="more" id="more" hidden>Mostrar mais</button>
-      </section>
-
-      <!-- States Table Section -->
-      <section class="card" id="sec-uf">
-        <div>
-          <div class="eyebrow" id="ufscope">Brasil</div>
-          <h2>Por estado</h2>
-        </div>
-        <div class="facts" style="font-size:.82rem">Segue os filtros da página, exceto o de estado. Toque num estado para filtrar a página por ele. Percentuais de Lula e Flávio sobre os votos válidos do 1º turno.</div>
-        <div class="tblw"><table id="uftab"></table></div>
-      </section>
-
-      <!-- Timeline Section -->
-      <section class="card" id="sec-timeline">
-        <div>
-          <div class="eyebrow">Série Histórica</div>
-          <h2>Linha do tempo das extrações</h2>
-        </div>
-        <p class="lead">Evolução dos dados ao longo das extrações. Compare como os totais de seções, eleitores e aptos mudaram entre as diferentes cargas divulgadas pelo TSE.</p>
-        <div id="timeline-charts"></div>
-      </section>
-
-      <!-- Data View and Download Section -->
+      <!-- Data View and Download Section (Logo abaixo do mapa) -->
       <section class="card" id="sec-dados">
         <div class="data-header">
           <div>
@@ -233,6 +203,36 @@
         <div class="data-pagination" id="data-pagination">
           <button type="button" class="more" id="data-load-more">Mostrar mais seções</button>
         </div>
+      </section>
+
+      <!-- Changes List Section -->
+      <section class="card" id="sec-lista">
+        <div>
+          <div class="eyebrow" id="listscope">Brasil</div>
+          <h2>Mudanças de local</h2>
+        </div>
+        <div class="rows" id="list"></div>
+        <button type="button" class="more" id="more" hidden>Mostrar mais</button>
+      </section>
+
+      <!-- States Table Section -->
+      <section class="card" id="sec-uf">
+        <div>
+          <div class="eyebrow" id="ufscope">Brasil</div>
+          <h2>Por estado</h2>
+        </div>
+        <div class="facts" style="font-size:.82rem">Segue os filtros da página, exceto o de estado. Toque num estado para filtrar a página por ele. Percentuais de Lula e Flávio sobre os votos válidos do 1º turno.</div>
+        <div class="tblw"><table id="uftab"></table></div>
+      </section>
+
+      <!-- Timeline Section -->
+      <section class="card" id="sec-timeline">
+        <div>
+          <div class="eyebrow">Série Histórica</div>
+          <h2>Linha do tempo das extrações</h2>
+        </div>
+        <p class="lead">Evolução dos dados ao longo das extrações. Compare como os totais de seções, eleitores e aptos mudaram entre as diferentes cargas divulgadas pelo TSE.</p>
+        <div id="timeline-charts"></div>
       </section>
 
       <!-- About Section -->

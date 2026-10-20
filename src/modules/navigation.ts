@@ -1,6 +1,6 @@
 import { $maybe } from "../utils/dom";
 
-const SECTION_IDS = ["top", "sec-mapa", "sec-lista", "sec-uf", "sec-timeline", "sec-dados", "sec-sobre"];
+const SECTION_IDS = ["top", "sec-mapa", "sec-dados", "sec-lista", "sec-uf", "sec-timeline", "sec-sobre"];
 
 /** Destaque do link ativo no header, com rolagem suave e acompanhamento do scroll. */
 export function initializeNavigation(): void {
