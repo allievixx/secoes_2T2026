@@ -1,0 +1,13 @@
+{
+  "dataUrl": "https://storage.googleapis.com/extracao_alteracao_locais_votacao/secoes_alteradas_2t_2026.json",
+  "dataFormat": "json",
+  "municipalitiesUrl": "https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR?formato=application/vnd.geo%2Bjson&qualidade=minima&intrarregiao=municipio",
+  "statesUrl": "https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR?formato=application/vnd.geo%2Bjson&qualidade=minima&intrarregiao=UF",
+  "metadata": {
+    "extractionDate": "19/10/2026",
+    "gen": "15/10/2026",
+    "reg": "17/10/2026 06:28",
+    "electionDate": "25 de outubro",
+    "previousElectionDate": "4 de outubro"
+  }
+}
