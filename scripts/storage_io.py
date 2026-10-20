@@ -78,6 +78,7 @@ def publish_json(
     fields: list[str],
     config: dict[str, Any],
     extracted_at: datetime,
+    source_versions: dict[str, Any] | None = None,
 ) -> str:
     bucket_name, object_name = target(config)
     if not rows:
@@ -129,10 +130,13 @@ def publish_json(
                 }]
             else:
                 raise StorageError("Formato JSON publicado inválido; publicação cancelada para preservar os dados")
-        current = {
+        current: dict[str, Any] = {
             "extracted_at": extracted_at.astimezone(timezone.utc).isoformat(),
             "rows": [typed_row(row, fields) for row in rows],
         }
+        # Versão exata de cada fonte (Last-Modified/ETag/SHA-256): o TSE republica ZIPs na mesma URL.
+        if source_versions:
+            current["sources"] = source_versions
         snapshots = [snapshot for snapshot in snapshots if snapshot["extracted_at"] != current["extracted_at"]]
         snapshots.append(current)
         snapshots.sort(key=lambda snapshot: snapshot["extracted_at"])

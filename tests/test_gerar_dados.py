@@ -12,8 +12,8 @@ import zipfile
 
 from scripts.gerar_dados import (
     CHANGES, FIELDS, REGISTRY, RESULT_KEY, DataError, build_rows, coordinate,
-    haversine, iter_csv, load_changes, load_ibge, load_registry, load_results,
-    main, normalize, write_output,
+    download, haversine, iter_csv, load_changes, load_ibge, load_registry, load_results,
+    main, normalize, source_version, write_output,
 )
 
 
@@ -109,19 +109,21 @@ class PipelineTest(unittest.TestCase):
         path.write_bytes(gzip.compress(json.dumps(rows).encode()))
         self.assertEqual(load_ibge(path, {})[("AL", "CAMPOGRANDE")], 2701506)
 
-    def fixtures(self, retain_old=True):
+    def fixtures(self, retain_old=True, registry_rows=None):
         changes = load_changes(self.source("changes.zip", [changed()]), "cp1252", 2026)
-        rows = [registry()]
-        if retain_old:
-            rows.append(registry("2", old=True))
-        sections, locations, names = load_registry(self.source("registry.zip", rows), changes, "cp1252", 2026)
+        rows = registry_rows if registry_rows is not None else [registry()] + ([registry("2", old=True)] if retain_old else [])
+        sections, locations, names, places = load_registry(self.source("registry.zip", rows), changes, "cp1252", 2026)
         k = ("AL", "27596", 20, 1)
         results = {k:{"aptos_1t":350, "abstencao_1t":70, "lula_1t":150, "flavio_1t":100, "outros_1t":20, "brancos_1t":5, "nulos_1t":5}}
-        return changes, sections, locations, names, {("AL", "CAMPOGRANDE"):2701506}, results
+        return changes, sections, locations, names, {("AL", "CAMPOGRANDE"):2701506}, results, places
+
+    def build(self, args, distances):
+        changes, sections, locations, names, ibge, results, places = args
+        return build_rows(changes, sections, locations, names, ibge, results, distances, places)
 
     def test_build_rows_full_join(self):
         args = self.fixtures()
-        rows, issues = build_rows(*args, {("AL", "27596", 20, "20"):5.0})
+        rows, issues = self.build(args, {("AL", "27596", 20, "20"):5.0})
         self.assertFalse(issues)
         self.assertEqual(list(rows[0]), FIELDS)
         self.assertEqual(rows[0]["eleitores"], 400)
@@ -132,16 +134,94 @@ class PipelineTest(unittest.TestCase):
 
     def test_old_local_without_sections_has_no_invented_coordinates(self):
         args = self.fixtures(retain_old=False)
-        rows, issues = build_rows(*args, {("AL", "27596", 20, "20"):1.0})
+        rows, issues = self.build(args, {("AL", "27596", 20, "20"):1.0})
         self.assertFalse(issues)
         self.assertEqual(rows[0]["lat_1t"], "")
         self.assertEqual(rows[0]["distancia_km"], "")
         self.assertEqual(rows[0]["endereco_1t"], "Rua A; nº 1")
 
     def test_missing_enrichments_stay_unknown_not_false(self):
-        rows, issues = build_rows(*self.fixtures(), {})
+        rows, issues = self.build(self.fixtures(), {})
         self.assertFalse(issues)
         self.assertEqual(rows[0]["regiao_longe_da_urna"], "")
+
+    def stale_registry(self, **overrides):
+        """Linha de 2º turno que o TSE ainda não atualizou: local atual é o antigo e o novo está só em *_ORIGINAL."""
+        return registry(old=True, NR_LOCAL_VOTACAO_ORIGINAL="20", NM_LOCAL_VOTACAO_ORIGINAL="Escola Nova",
+                        DS_ENDERECO_LOCVT_ORIGINAL="Rua B (original)", **overrides)
+
+    def test_final_local_only_in_original_columns_uses_same_zone_place_from_any_turn(self):
+        # A seção 7 estava na Escola Nova (id 20) no 1º turno e vai para a Antiga no 2º: a Escola Nova só aparece
+        # em linha de 1º turno, fora do índice por nome, mas o id na mesma zona a identifica com segurança.
+        other = [registry("7", NR_TURNO="1"), registry("7", old=True)]
+        rows, issues = self.build(self.fixtures(registry_rows=[self.stale_registry(), *other]), {("AL", "27596", 20, "20"):5.0})
+        self.assertFalse(issues)
+        self.assertEqual(rows[0]["endereco_2t"], "Rua B")
+        self.assertEqual(rows[0]["bairro_2t"], "Centro")
+        self.assertEqual(rows[0]["lat_2t"], -9.95)
+        self.assertEqual(rows[0]["endereco_1t"], "Rua A; nº 1")
+        self.assertEqual(rows[0]["lat_1t"], -9.96)
+        self.assertEqual(rows[0]["distancia_km"], 1.112)
+        self.assertTrue(rows[0]["regiao_longe_da_urna"])
+
+    def test_final_local_id_in_another_zone_or_with_other_name_is_not_trusted(self):
+        # NR_LOCAL_VOTACAO se repete entre zonas: id 20 na zona 21 é outro lugar.
+        for decoy in [registry("7", NR_ZONA="21", NR_TURNO="1"), registry("7", NR_TURNO="1", NM_LOCAL_VOTACAO="Ginásio")]:
+            rows, issues = self.build(self.fixtures(registry_rows=[self.stale_registry(), decoy]), {})
+            self.assertEqual(len(issues), 1, decoy["NM_LOCAL_VOTACAO"])
+            self.assertIn("sem coordenadas", issues[0])
+            self.assertEqual(rows[0]["endereco_2t"], "Rua B (original)")
+            self.assertEqual(rows[0]["lat_2t"], "")
+
+    def test_final_local_only_in_original_columns_without_coordinates_keeps_address(self):
+        rows, issues = self.build(self.fixtures(registry_rows=[self.stale_registry()]), {})
+        self.assertEqual(len(issues), 1)
+        self.assertIn("sem coordenadas", issues[0])
+        self.assertEqual(rows[0]["endereco_2t"], "Rua B (original)")
+        self.assertEqual(rows[0]["lat_2t"], "")
+        self.assertEqual(rows[0]["distancia_km"], "")
+
+    def test_final_local_only_in_original_columns_with_ambiguous_coordinates_stays_empty(self):
+        twins = [registry("7", NR_TURNO="1"), registry("7", old=True), registry("8", NR_TURNO="1", NR_LATITUDE="-9.80"), registry("8", old=True)]
+        rows, issues = self.build(self.fixtures(registry_rows=[self.stale_registry(), *twins]), {})
+        self.assertEqual(len(issues), 1)
+        self.assertIn("ambíguas", issues[0])
+        self.assertEqual(rows[0]["endereco_2t"], "Rua B (original)")
+        self.assertEqual(rows[0]["lat_2t"], "")
+
+    def test_final_local_absent_everywhere_is_reported(self):
+        rows, issues = self.build(self.fixtures(registry_rows=[registry(old=True)]), {})
+        self.assertEqual(len(issues), 1)
+        self.assertIn("não encontrado", issues[0])
+        self.assertEqual(rows[0]["endereco_2t"], "")
+
+    def test_download_records_source_version_and_cache_hit_reuses_it(self):
+        payload = b"abc;def\n1;2\n"
+        headers = {"Content-Length": str(len(payload)), "Last-Modified": "Tue, 20 Oct 2026 00:05:46 GMT", "ETag": '"a9a53db"'}
+
+        class FakeResponse(io.BytesIO):
+            def __init__(self):
+                super().__init__(payload)
+                self.headers = headers
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                self.close()
+
+        cache = self.root / "cache"
+        with patch("scripts.gerar_dados.urllib.request.urlopen", return_value=FakeResponse()) as opened:
+            path = download("https://example.test/registry.zip", cache)
+            self.assertEqual(path.read_bytes(), payload)
+            self.assertEqual(download("https://example.test/registry.zip", cache), path)
+            self.assertEqual(opened.call_count, 1)
+        version = source_version(path)
+        self.assertEqual(version["last_modified"], headers["Last-Modified"])
+        self.assertEqual(version["etag"], headers["ETag"])
+        self.assertEqual(version["sha256"], __import__("hashlib").sha256(payload).hexdigest())
+        self.assertEqual(version["bytes"], len(payload))
+        local = self.root / "local.csv"
+        local.write_bytes(payload)
+        self.assertEqual(source_version(local), {"sha256": version["sha256"], "bytes": len(payload)})
 
     def test_results_turn_office_filter_and_duplicate_protection(self):
         counts = {"13":150, "22":100, "12":20, "95":5, "96":5}

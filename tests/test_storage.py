@@ -61,16 +61,18 @@ class StorageTest(unittest.TestCase):
 
     def test_uploads_typed_json_snapshot(self):
         extracted_at = datetime(2026, 10, 19, 12, 30, tzinfo=timezone.utc)
+        versions = {"registry": {"source": "https://tse/registry.zip", "etag": '"abc"', "sha256": "0" * 64}}
         with patch.dict("sys.modules", self.google_modules):
             result = publish_json([sample_row()], FIELDS, {
                 "bucket": "test-bucket", "object": "dash/snapshot.json",
-            }, extracted_at)
+            }, extracted_at, versions)
         self.assertEqual(result, "test-bucket/dash/snapshot.json")
         self.bucket.blob.assert_called_once_with("dash/snapshot.json")
         args, kwargs = self.upload.call_args
         payload = json.loads(args[0])
         snapshot = payload["snapshots"][0]
         self.assertEqual(snapshot["extracted_at"], extracted_at.isoformat())
+        self.assertEqual(snapshot["sources"], versions)
         self.assertEqual(snapshot["rows"][0]["eleitores"], 400)
         self.assertIsNone(snapshot["rows"][0]["lat_1t"])
         self.assertIsNone(snapshot["rows"][0]["regiao_longe_da_urna"])
@@ -132,6 +134,7 @@ class StorageTest(unittest.TestCase):
         self.assertEqual([snapshot["extracted_at"] for snapshot in payload["snapshots"]], [
             old_time.isoformat(), current_time.isoformat(),
         ])
+        self.assertNotIn("sources", payload["snapshots"][1])
 
     def test_rejects_naive_extraction_timestamp(self):
         with self.assertRaisesRegex(StorageError, "fuso horário"):

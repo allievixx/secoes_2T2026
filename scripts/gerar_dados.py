@@ -13,7 +13,6 @@ import logging
 import math
 import os
 import re
-import shutil
 import sys
 import tempfile
 import unicodedata
@@ -105,6 +104,18 @@ def resolve_source(source: str, base: Path) -> str:
     return source if urllib.parse.urlparse(source).scheme in {"http", "https"} else str((base / source).resolve())
 
 
+def source_version(path: Path) -> dict[str, Any]:
+    """Versão da fonte gravada ao lado do arquivo baixado; fontes locais só informam tamanho e SHA-256."""
+    sidecar = path.with_name(path.name + ".meta.json")
+    if sidecar.is_file():
+        return json.loads(sidecar.read_text(encoding="utf-8"))
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024*1024), b""):
+            digest.update(chunk)
+    return {"sha256": digest.hexdigest(), "bytes": path.stat().st_size}
+
+
 def download(source: str, cache: Path, refresh: bool = False) -> Path:
     """Cache por URL, download em disco e publicação atômica; sem carregar ZIP em RAM."""
     if urllib.parse.urlparse(source).scheme not in {"http", "https"}:
@@ -122,13 +133,25 @@ def download(source: str, cache: Path, refresh: bool = False) -> Path:
     temporary: Path | None = None
     try:
         request = urllib.request.Request(source, headers={"User-Agent": "secoes-dashboard/1.0", "Accept-Encoding": "identity"})
+        digest = hashlib.sha256()
         with urllib.request.urlopen(request, timeout=120) as response:
             expected = response.headers.get("Content-Length")
+            # O TSE sobrescreve alguns ZIPs na mesma URL; Last-Modified/ETag/SHA-256 identificam a versão usada.
+            version = {
+                "url": source,
+                "last_modified": response.headers.get("Last-Modified"),
+                "etag": response.headers.get("ETag"),
+                "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            }
             with tempfile.NamedTemporaryFile(dir=cache, delete=False) as handle:
                 temporary = Path(handle.name)
-                shutil.copyfileobj(response, handle, 1024*1024)
+                for chunk in iter(lambda: response.read(1024*1024), b""):
+                    digest.update(chunk)
+                    handle.write(chunk)
         if expected and temporary.stat().st_size != int(expected):
             raise DataError(f"Download incompleto: {source}")
+        version.update(sha256=digest.hexdigest(), bytes=temporary.stat().st_size)
+        write_json(destination.with_name(destination.name + ".meta.json"), version)
         temporary.replace(destination)
         return destination
     finally:
@@ -219,6 +242,9 @@ def load_registry(path: Path, changes: dict[Section, dict[str, str]], encoding: 
     sections: dict[Section, dict[str, str]] = {}
     locations: dict[tuple[str, str, int, str], list[dict[str, str]]] = defaultdict(list)
     names: dict[Section, set[Section]] = defaultdict(set)
+    # Assinaturas (nome, endereço, bairro, ponto) por local, em qualquer turno, para achar um local citado só
+    # nas colunas *_ORIGINAL. A chave inclui a zona: NR_LOCAL_VOTACAO se repete entre zonas do mesmo município.
+    places: dict[tuple[str, str, int, str], set[tuple[str, str, str, tuple[float, float] | None]]] = defaultdict(set)
     for row in iter_csv(path, REGISTRY, encoding, {k[0] for k in changes}):
         if integer(row["AA_ELEICAO"], "AA_ELEICAO") != year:
             continue
@@ -226,6 +252,8 @@ def load_registry(path: Path, changes: dict[Section, dict[str, str]], encoding: 
         if named[:3] not in wanted:
             continue
         k = key(row)
+        if row["NR_LOCAL_VOTACAO"].isdigit():
+            places[(*k[:3], str(int(row["NR_LOCAL_VOTACAO"])))].add((row["NM_LOCAL_VOTACAO"], row["DS_ENDERECO"], row["NM_BAIRRO"], point(row)))
         names[named].add(k)
         old = sections.get(k)
         rank = integer(row["NR_TURNO"], "NR_TURNO")
@@ -242,7 +270,7 @@ def load_registry(path: Path, changes: dict[Section, dict[str, str]], encoding: 
         if identity not in seen:
             seen.add(identity)
             locations[(*k[:3], normalize(row["NM_LOCAL_VOTACAO"]))].append(row)
-    return sections, locations, names
+    return sections, locations, names, dict(places)
 
 
 def find_location(candidates: list[dict[str, str]], label: str) -> dict[str, str] | None:
@@ -321,7 +349,29 @@ def load_distances(path: Path, encoding: str) -> dict[tuple[str, str, int, str],
     return result
 
 
-def build_rows(changes, sections, locations, names, ibge, results, distances):
+def resolve_final_from_original(registry: dict[str, str], k: Section, places: dict[tuple[str, str, int, str], set[Any]], named: Section, issues: list[str]):
+    """Local final citado só nas colunas *_ORIGINAL: o TSE ainda não atualizou a linha do 2º turno."""
+    local_id = registry["NR_LOCAL_VOTACAO_ORIGINAL"]
+    if not local_id.isdigit():
+        return None
+    local_id = str(int(local_id))
+    found = {"id": local_id, "address": registry["DS_ENDERECO_LOCVT_ORIGINAL"], "bairro": "", "point": None}
+    # Só aceita o local se id e nome coincidirem na mesma zona; coordenadas divergentes ficam vazias.
+    wanted_name = normalize(registry["NM_LOCAL_VOTACAO_ORIGINAL"])
+    located = {s for s in places.get((*k[:3], local_id), set()) if s[3] is not None and normalize(s[0]) == wanted_name}
+    points = {s[3] for s in located}
+    if len(points) == 1:
+        _, address, bairro, coordinates = sorted(located)[0]
+        found.update(address=address or found["address"], bairro=bairro, point=coordinates)
+    elif points:
+        issues.append(f"{named}: local final só nas colunas originais do cadastro; coordenadas ambíguas, mantidas vazias")
+    else:
+        issues.append(f"{named}: local final só nas colunas originais do cadastro; sem coordenadas disponíveis")
+    return found
+
+
+def build_rows(changes, sections, locations, names, ibge, results, distances, places=None):
+    places = places or {}
     output: list[dict[str, Any]] = []
     issues: list[str] = []
     for named, change in sorted(changes.items()):
@@ -349,19 +399,27 @@ def build_rows(changes, sections, locations, names, ibge, results, distances):
         old = find_location(old_candidates, str(named)+" inicial")
         if old:
             row["endereco_1t"] = old["DS_ENDERECO"]
+        final_id: str | None = None
+        final_point: tuple[float, float] | None = None
         if final:
+            final_id, final_point = str(integer(final["NR_LOCAL_VOTACAO"], "NR_LOCAL_VOTACAO")), point(final)
             row.update(endereco_2t=final["DS_ENDERECO"], bairro_2t=final["NM_BAIRRO"])
-        else:
+        elif normalize(registry["NM_LOCAL_VOTACAO_ORIGINAL"]) == normalize(row["local_2t"]):
+            found = resolve_final_from_original(registry, k, places, named, issues)
+            if found:
+                final_id, final_point = found["id"], found["point"]
+                row.update(endereco_2t=found["address"], bairro_2t=found["bairro"])
+        if final_id is None:
             issues.append(f"{named}: local final não encontrado na versão do cadastro")
-        a, b = point(old) if old else None, point(final) if final else None
+        a, b = point(old) if old else None, final_point
         for suffix, coordinates in [("1t", a), ("2t", b)]:
             if coordinates:
                 row[f"lat_{suffix}"], row[f"lon_{suffix}"] = coordinates
         distance = haversine(a, b)
         if distance is not None:
             row["distancia_km"] = distance
-        if final:
-            local_key = (*k[:3], str(integer(final["NR_LOCAL_VOTACAO"], "NR_LOCAL_VOTACAO")))
+        if final_id is not None:
+            local_key = (*k[:3], final_id)
             if local_key in distances:
                 row["regiao_longe_da_urna"] = distances[local_key] >= 5
             elif distances:
@@ -427,7 +485,10 @@ def main(argv: list[str] | None = None) -> int:
             storage_target(config.get("storage", {}))
         base, encoding, year = args.config.resolve().parent, config.get("encoding", "cp1252"), int(config.get("year", 2026))
         sources = config["sources"]
-        source = lambda name: download(resolve_source(sources[name], base), args.cache_dir, args.refresh)
+        source_paths: dict[str, Path] = {}
+        def source(name: str) -> Path:
+            source_paths[name] = download(resolve_source(sources[name], base), args.cache_dir, args.refresh)
+            return source_paths[name]
         changes_path = source("changes")
         changes = load_changes(changes_path, encoding, year)
         if args.inspect:
@@ -441,18 +502,19 @@ def main(argv: list[str] | None = None) -> int:
         # Enriquecimento adiado pelo usuário: ausências viram NULL, sem bloquear a carga.
         distances = load_distances(source("longDistance"), config.get("longDistanceEncoding", "utf-8-sig")) if sources.get("longDistance") else {}
         ibge = load_ibge(source("municipalities"), config.get("ibgeOverrides", {}))
-        sections, locations, names = load_registry(source("registry"), changes, encoding, year)
+        sections, locations, names, places = load_registry(source("registry"), changes, encoding, year)
         wanted = {next(iter(names[k])) for k in changes if len(names.get(k, set())) == 1}
         candidates = config.get("candidates", {"lula":"13", "flavio":"22"})
         lula, flavio = str(integer(str(candidates["lula"]), "candidates.lula")), str(integer(str(candidates["flavio"]), "candidates.flavio"))
         if lula == flavio or any(not 1 <= int(n) <= 94 for n in [lula, flavio]):
             raise DataError("Números dos candidatos devem ser diferentes e estar entre 1 e 94")
         results = load_results(source("votes"), source("details"), wanted, encoding, year, lula, flavio)
-        rows, issues = build_rows(changes, sections, locations, names, ibge, results, distances)
+        rows, issues = build_rows(changes, sections, locations, names, ibge, results, distances, places)
         generated_at = datetime.now(timezone.utc)
+        source_versions = {name: {"source": sources[name], **source_version(path)} for name, path in source_paths.items()}
         report = {
             "generated_at":generated_at.isoformat(),
-            "year":year, "sources":sources, "candidates":candidates,
+            "year":year, "sources":sources, "source_versions":source_versions, "candidates":candidates,
             "secoes":len(rows), "eleitores":sum(r["eleitores"] for r in rows),
             "municipios":len({r["cd_ibge"] for r in rows}),
             "sem_distancia_mudanca":sum(r["distancia_km"] == "" for r in rows),
@@ -468,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
         if issues and not allow_incomplete:
             raise DataError(f"{len(issues)} pendências; saída preservada. Consulte {args.report}")
         if args.destination in {"storage", "both"}:
-            report["storage_object"] = publish_json(rows, FIELDS, config.get("storage", {}), generated_at)
+            report["storage_object"] = publish_json(rows, FIELDS, config.get("storage", {}), generated_at, source_versions)
             bucket, object_name = storage_target(config.get("storage", {}))
             report["dashboard_data_url"] = public_url(bucket, object_name)
             LOGGER.info("Publicado snapshot JSON em %s", report["storage_object"])
