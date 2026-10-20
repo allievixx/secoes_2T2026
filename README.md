@@ -8,7 +8,7 @@ a aplicação mantém o mapa, resumo, filtros, lista e tabela por estado. os dad
 
 Requer Node.js 20 ou superior. Instale as dependências com `npm install` e inicie o servidor de desenvolvimento com `npm run dev` (Vite, com recarga automática). Abra http://localhost:8080. Para executar os testes, use `npm test`; para checar os tipos, `npm run typecheck`.
 
-Para publicar (GitHub Pages ou qualquer hospedagem estática), gere a build com `npm run build` e publique a pasta `dist/`. No GitHub Pages isso é automático: o workflow [.github/workflows/pages.yml](.github/workflows/pages.yml) roda typecheck, testes e build a cada push na `main` e publica `dist/` em https://persichetta.github.io/secoes_2T2026/. A build já inclui `dashboard-config.json`; os dados continuam sendo buscados em runtime do Cloud Storage — não há backend, e credenciais Google não ficam no navegador. `npm run preview` serve a build localmente. Abrir o HTML diretamente por `file://` não funciona, pois o navegador restringe o carregamento de módulos e requisições locais.
+Para publicar (GitHub Pages ou qualquer hospedagem estática), gere a build com `npm run build` e publique a pasta `dist/`. No GitHub Pages isso é automático: o workflow [.github/workflows/pages.yml](.github/workflows/pages.yml) roda typecheck, testes e build a cada push na `main` e publica `dist/` em https://allievixx.github.io/secoes_2T2026/. A build já inclui `dashboard-config.json`; os dados continuam sendo buscados em runtime do Cloud Storage — não há backend, e credenciais Google não ficam no navegador. `npm run preview` serve a build localmente. Abrir o HTML diretamente por `file://` não funciona, pois o navegador restringe o carregamento de módulos e requisições locais.
 
 ## fontes dinâmicas e atualização
 
