@@ -73,6 +73,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.9.8"
+          terraform_wrapper: false # o wrapper é um script Node, que o runner próprio não tem no PATH
 
       - name: terraform fmt (confere formatação)
         run: terraform fmt -check -recursive infra/terraform
