@@ -29,3 +29,26 @@ privados, e este repositório é público. O Actions daqui só usa a conta de de
 
 - Código da rotina mudou: rode o *Deploy da rotina* (vazio = topo da `main`; um commit antigo volta atrás).
 - Infra mudou: `terraform plan` e `apply` à mão, por quem é dono do projeto.
+
+## Logs no Grafana Cloud (Loki)
+
+A rotina envia logs automaticamente para o Grafana Cloud Loki caso as variáveis de ambiente estejam configuradas:
+
+| Variável | Descrição | Exemplo |
+| --- | --- | --- |
+| `LOKI_URL` | URL do endpoint de push do Loki | `https://logs-prod-xxx.grafana.net/loki/api/v1/push` |
+| `LOKI_USER` | Usuário / ID da instância do Loki | `123456` |
+| `LOKI_TOKEN` | Token com permissão `logs:write` | `glc_...` |
+| `LOKI_LABELS` | *(Opcional)* Labels adicionais | `app=secoes,job=secoes` |
+
+Para configurar no Cloud Run Job existente:
+
+```bash
+gcloud run jobs update secoes \
+  --region us-central1 \
+  --project thech-against-bozo \
+  --set-env-vars LOKI_URL="https://logs-prod-xxx.grafana.net/loki/api/v1/push",LOKI_USER="123456" \
+  --set-secrets LOKI_TOKEN=secoes-loki-token:latest
+```
+
+*Nota:* O envio é fail-safe: se as variáveis estiverem ausentes ou o Grafana Cloud oscilar, a execução continua normalmente logando no `stdout`/Cloud Logging sem interromper o pipeline.

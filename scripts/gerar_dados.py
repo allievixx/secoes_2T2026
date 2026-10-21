@@ -494,6 +494,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inspect", action="store_true", help="Baixar somente alterações e informar cabeçalho/contagens, sem gerar saída")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    loki_handler = None
+    try:
+        from scripts.loki_logger import setup_loki_logging
+        loki_handler = setup_loki_logging()
+    except Exception:
+        pass
     try:
         config = json.loads(args.config.read_text(encoding="utf-8"))
         configured_allow_incomplete = config.get("allowIncomplete", False)
@@ -575,6 +581,12 @@ def main(argv: list[str] | None = None) -> int:
     except (DataError, StorageError, OSError, ValueError, KeyError, zipfile.BadZipFile, UnicodeError) as exc:
         LOGGER.error("%s", exc)
         return 1
+    finally:
+        if loki_handler:
+            try:
+                loki_handler.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
