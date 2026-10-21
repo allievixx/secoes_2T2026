@@ -7,7 +7,7 @@
     "bucket": "extracao_alteracao_locais_votacao",
     "object": "secoes_alteradas_2t_2026.json",
     "archivePrefix": "fontes",
-    "archiveSources": ["changes"]
+    "archiveSources": ["changes", "registry", "votes", "details"]
   },
   "sources": {
     "changes": "data/secoes_eleitorais_alteradas_2t-pais_2026.csv",
