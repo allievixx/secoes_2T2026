@@ -26,8 +26,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 if __package__:
+    from .loki_logger import setup_loki_logging
     from .storage_io import StorageError, archive_source, archive_sources, public_url, publish_json, target as storage_target
 else:
+    from loki_logger import setup_loki_logging
     from storage_io import StorageError, archive_source, archive_sources, public_url, publish_json, target as storage_target
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -494,12 +496,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inspect", action="store_true", help="Baixar somente alterações e informar cabeçalho/contagens, sem gerar saída")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    loki_handler = None
-    try:
-        from scripts.loki_logger import setup_loki_logging
-        loki_handler = setup_loki_logging()
-    except Exception:
-        pass
+    loki_handler = setup_loki_logging()
     try:
         config = json.loads(args.config.read_text(encoding="utf-8"))
         configured_allow_incomplete = config.get("allowIncomplete", False)

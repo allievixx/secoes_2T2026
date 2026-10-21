@@ -221,7 +221,7 @@ class LokiLoggerTest(unittest.TestCase):
         from scripts import gerar_dados
 
         mock_handler = MagicMock()
-        with patch("scripts.loki_logger.setup_loki_logging", return_value=mock_handler) as mock_setup:
+        with patch("scripts.gerar_dados.setup_loki_logging", return_value=mock_handler) as mock_setup:
             ret = gerar_dados.main(["--config", "/tmp/nonexistent-config.json"])
             self.assertEqual(ret, 1)
             mock_setup.assert_called_once()

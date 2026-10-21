@@ -92,6 +92,7 @@ class LokiHandler(logging.Handler):
 
         self._buffer: list[tuple[int, str, str]] = []
         self._lock = threading.Lock()
+        self._send_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._closed = False
@@ -135,13 +136,14 @@ class LokiHandler(logging.Handler):
 
     def flush(self) -> None:
         """Esvazia o buffer e envia todos os registros pendentes."""
-        with self._lock:
-            if not self._buffer:
-                return
-            batch = self._buffer[:]
-            self._buffer.clear()
+        with self._send_lock:
+            with self._lock:
+                if not self._buffer:
+                    return
+                batch = self._buffer[:]
+                self._buffer.clear()
 
-        self._send_batch(batch)
+            self._send_batch(batch)
 
     def _send_batch(self, batch: list[tuple[int, str, str]]) -> None:
         if not batch or not self.url:

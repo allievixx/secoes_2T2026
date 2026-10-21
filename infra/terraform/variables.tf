@@ -41,3 +41,15 @@ variable "image_keep_count" {
   type    = number
   default = 3
 }
+
+variable "loki_url" {
+  description = "URL do endpoint de push do Loki no Grafana Cloud. Se vazio, o envio fica desligado."
+  type        = string
+  default     = ""
+}
+
+variable "loki_user" {
+  description = "Usuário / ID da instância do Loki no Grafana Cloud."
+  type        = string
+  default     = ""
+}

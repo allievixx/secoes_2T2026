@@ -32,23 +32,24 @@ privados, e este repositório é público. O Actions daqui só usa a conta de de
 
 ## Logs no Grafana Cloud (Loki)
 
-A rotina envia logs automaticamente para o Grafana Cloud Loki caso as variáveis de ambiente estejam configuradas:
+O Terraform habilita a API do Secret Manager, provisiona o segredo `secoes-loki-token` (sem versão) e concede `roles/secretmanager.secretAccessor` à service account do Job (`secoes-job`).
 
-| Variável | Descrição | Exemplo |
-| --- | --- | --- |
-| `LOKI_URL` | URL do endpoint de push do Loki | `https://logs-prod-xxx.grafana.net/loki/api/v1/push` |
-| `LOKI_USER` | Usuário / ID da instância do Loki | `123456` |
-| `LOKI_TOKEN` | Token com permissão `logs:write` | `glc_...` |
-| `LOKI_LABELS` | *(Opcional)* Labels adicionais | `app=secoes,job=secoes` |
+### Como ativar:
 
-Para configurar no Cloud Run Job existente:
+1. **Adicionar o valor do token no Secret Manager:**
+   ```bash
+   echo -n "<token_do_grafana>" | gcloud secrets versions add secoes-loki-token \
+     --project thech-against-bozo \
+     --data-file=-
+   ```
 
-```bash
-gcloud run jobs update secoes \
-  --region us-central1 \
-  --project thech-against-bozo \
-  --set-env-vars LOKI_URL="https://logs-prod-xxx.grafana.net/loki/api/v1/push",LOKI_USER="123456" \
-  --set-secrets LOKI_TOKEN=secoes-loki-token:latest
-```
+2. **Aplicar o Terraform com as variáveis do Loki:**
+   ```bash
+   terraform -chdir=infra/terraform apply \
+     -var loki_url="https://logs-prod-xxx.grafana.net/loki/api/v1/push" \
+     -var loki_user="123456"
+   ```
 
-*Nota:* O envio é fail-safe: se as variáveis estiverem ausentes ou o Grafana Cloud oscilar, a execução continua normalmente logando no `stdout`/Cloud Logging sem interromper o pipeline.
+Se `loki_url` estiver vazia (padrão), o Job não monta as variáveis e o Loki permanece desligado.
+
+*Nota:* O envio é fail-safe: se as variáveis estiverem ausentes ou o Grafana Cloud oscilar, a rotina continua normalmente logando no `stdout`/Cloud Logging sem interromper o pipeline.
