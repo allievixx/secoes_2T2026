@@ -1,5 +1,5 @@
 {
-  "dataUrl": "https://storage.googleapis.com/extracao_alteracao_locais_votacao/secoes_alteradas_2t_2026.json",
+  "dataUrl": "https://storage.googleapis.com/secoes-comite-popular-tech/secoes_alteradas_2t_2026.json",
   "dataFormat": "json",
   "municipalitiesUrl": "https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR?formato=application/vnd.geo%2Bjson&qualidade=minima&intrarregiao=municipio",
   "statesUrl": "https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR?formato=application/vnd.geo%2Bjson&qualidade=minima&intrarregiao=UF",
