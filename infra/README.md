@@ -14,6 +14,7 @@ Cloud Scheduler (06:30, 11:30, 15:30, 20:30, America/Sao_Paulo; nasce pausado)
 | --- | --- | --- |
 | `infra/terraform/` | bucket, Artifact Registry, Job, Scheduler, contas e o provider de WIF | à mão, dono do projeto |
 | `.github/workflows/deploy.yml` | build da imagem, troca da imagem do Job e uma execução | à mão (workflow_dispatch) |
+| `.github/workflows/rodar-rotina.yml` | uma execução do Job com a imagem atual, fora do agendamento | à mão (workflow_dispatch) |
 
 Por que a raiz não roda no CI: os módulos do `iac-shared` e o `terraform.yml` do `pipelines-compartilhados` são
 privados, e este repositório é público. O Actions daqui só usa a conta de deploy, que não mexe em IAM.
@@ -28,6 +29,7 @@ privados, e este repositório é público. O Actions daqui só usa a conta de de
 ## Depois
 
 - Código da rotina mudou: rode o *Deploy da rotina* (vazio = topo da `main`; um commit antigo volta atrás).
+- Precisa dos dados antes do próximo agendamento: rode o *Rodar a rotina agora* na `main`.
 - Infra mudou: `terraform plan` e `apply` à mão, por quem é dono do projeto.
 
 ## Logs no Grafana Cloud (Loki)

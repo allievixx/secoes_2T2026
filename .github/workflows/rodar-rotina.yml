@@ -1,0 +1,45 @@
+name: Rodar a rotina agora
+
+# Botão para rodar o Cloud Run Job "secoes" fora do agendamento, com a imagem que já está nele.
+# Não publica imagem nem muda o Job: para isso, use o "Deploy da rotina".
+
+on:
+  workflow_dispatch:
+
+# Mesmo grupo do deploy: duas execuções ao mesmo tempo gravam o mesmo JSON e uma perde a extração da outra.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: thech-against-bozo
+  REGION: us-central1
+  JOB: secoes
+  WIF_PROVIDER: projects/516156654361/locations/global/workloadIdentityPools/github/providers/secoes
+  CONTA_DEPLOY: secoes-deployer@thech-against-bozo.iam.gserviceaccount.com
+
+jobs:
+  rodar:
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 75
+    steps:
+      # Só a main vira a conta de deploy (infra/terraform/github.tf); em outro ramo a autenticação falha.
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CONTA_DEPLOY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Executar a rotina e conferir
+        run: |
+          if gcloud run jobs execute "$JOB" --region="$REGION" --wait; then
+            echo "::notice::$JOB rodou com sucesso."
+          else
+            echo "::error::$JOB falhou. Logs: https://console.cloud.google.com/run/jobs/details/${REGION}/${JOB}/logs?project=${PROJECT_ID}"
+            exit 1
+          fi
