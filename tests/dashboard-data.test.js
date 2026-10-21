@@ -68,6 +68,17 @@ test("carrega JSON público com nulls e números tipados", async t => {
   assert.equal(data.g[0].s[0].length,9);
 });
 
+test("evita resposta antiga do CDN nas consultas JSON e preserva parâmetros existentes", async t => {
+  t.mock.method(globalThis,"fetch",async(url,options)=>{
+    const request=new URL(url);
+    assert.equal(request.searchParams.get("existing"),"yes");
+    assert.match(request.searchParams.get("_refresh"),/^\d+$/);
+    assert.equal(options.cache,"no-store");
+    return {ok:true,json:async()=>({rows:[fixture()]})};
+  });
+  await loadDashboardData("https://storage.googleapis.com/bucket/data.json?existing=yes",{},undefined,"json");
+});
+
 test("informa falha HTTP e payload JSON inválido", async t => {
   const mocked=t.mock.method(globalThis,"fetch",async()=>({ok:false,status:503}));
   await assert.rejects(loadDashboardData("/api/secoes",{},undefined,"json"),/503/);

@@ -105,7 +105,13 @@ export async function loadDashboardData(url, metadata = {}, d3 = globalThis.d3, 
     let rows;
     let snapshots;
     if (format === "json") {
-      const response = await fetch(url, { cache: "no-store", signal: controller.signal });
+      // no-store evita o cache do navegador, mas não invalida respostas já guardadas no CDN do Storage.
+      let requestURL = url;
+      if (/^https?:\/\//i.test(String(url))) {
+        requestURL = new URL(String(url));
+        requestURL.searchParams.set("_refresh", String(Date.now()));
+      }
+      const response = await fetch(requestURL, { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error(`Não foi possível consultar a API de dados (HTTP ${response.status}).`);
       const payload = await response.json();
       if (Array.isArray(payload?.snapshots)) {
