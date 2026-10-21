@@ -6,16 +6,8 @@ locals {
     "cloudscheduler.googleapis.com",
     "iam.googleapis.com",
     "run.googleapis.com",
-    "secretmanager.googleapis.com",
+    "storage.googleapis.com",
   ])
-
-  # Credenciais do R2: o Terraform cria só o segredo, sem valor; a versão entra à mão (infra/README.md),
-  # para a chave não passar pelo estado.
-  r2_secrets = {
-    R2_ACCOUNT_ID        = "${var.name}-r2-account-id"
-    R2_ACCESS_KEY_ID     = "${var.name}-r2-access-key-id"
-    R2_SECRET_ACCESS_KEY = "${var.name}-r2-secret-access-key"
-  }
 }
 
 resource "google_project_service" "apis" {
@@ -54,27 +46,41 @@ resource "google_artifact_registry_repository" "imagens" {
   depends_on = [google_project_service.apis]
 }
 
-# --- Segredos ------------------------------------------------------------------
+# --- Dados ---------------------------------------------------------------------
+# O JSON que a rotina publica (pipeline-config.json, storage.bucket), com leitura pública e o CORS do
+# storage-cors.json, como o bucket de antes.
 
-resource "google_secret_manager_secret" "r2" {
-  for_each  = local.r2_secrets
-  project   = var.project_id
-  secret_id = each.value
-  labels    = local.labels
+resource "google_storage_bucket" "dados" {
+  project                     = var.project_id
+  name                        = var.bucket
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "inherited"
+  labels                      = local.labels
 
-  replication {
-    auto {}
+  dynamic "cors" {
+    for_each = jsondecode(file("${path.module}/../../storage-cors.json"))
+    content {
+      origin          = cors.value.origin
+      method          = cors.value.method
+      response_header = cors.value.responseHeader
+      max_age_seconds = cors.value.maxAgeSeconds
+    }
   }
 
   depends_on = [google_project_service.apis]
 }
 
-resource "google_secret_manager_secret_iam_member" "job_le_r2" {
-  for_each  = google_secret_manager_secret.r2
-  project   = var.project_id
-  secret_id = each.value.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = google_service_account.job.member
+resource "google_storage_bucket_iam_member" "leitura_publica" {
+  bucket = google_storage_bucket.dados.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+resource "google_storage_bucket_iam_member" "job_publica" {
+  bucket = google_storage_bucket.dados.name
+  role   = "roles/storage.objectUser"
+  member = google_service_account.job.member
 }
 
 # --- Job e agendamento ---------------------------------------------------------
@@ -119,24 +125,6 @@ resource "google_cloud_run_v2_job" "job" {
             memory = "2Gi"
           }
         }
-
-        env {
-          name  = "R2_BUCKET_NAME"
-          value = var.r2_bucket
-        }
-
-        dynamic "env" {
-          for_each = google_secret_manager_secret.r2
-          content {
-            name = env.key
-            value_source {
-              secret_key_ref {
-                secret  = env.value.secret_id
-                version = "latest"
-              }
-            }
-          }
-        }
       }
     }
   }
@@ -149,7 +137,7 @@ resource "google_cloud_run_v2_job" "job" {
     ]
   }
 
-  depends_on = [google_secret_manager_secret_iam_member.job_le_r2]
+  depends_on = [google_storage_bucket_iam_member.job_publica]
 }
 
 resource "google_cloud_scheduler_job" "job" {

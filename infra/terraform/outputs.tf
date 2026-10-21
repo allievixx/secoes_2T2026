@@ -11,7 +11,7 @@ output "imagens" {
   value = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.imagens.repository_id}"
 }
 
-output "segredos_r2" {
-  description = "Segredos que recebem a versão à mão (infra/README.md)."
-  value       = { for nome, s in google_secret_manager_secret.r2 : nome => s.secret_id }
+output "dados_url" {
+  description = "URL pública do JSON."
+  value       = "https://storage.googleapis.com/${google_storage_bucket.dados.name}/secoes_alteradas_2t_2026.json"
 }

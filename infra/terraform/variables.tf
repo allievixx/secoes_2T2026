@@ -26,15 +26,15 @@ variable "schedule" {
 }
 
 variable "agendar" {
-  description = "Liga o Scheduler. Deixe desligado até a rotina gerar a lista atual do TSE: cada execução fica no histórico do R2."
+  description = "Liga o Scheduler. Deixe desligado até a rotina gerar a lista atual do TSE: cada execução fica no histórico do JSON."
   type        = bool
   default     = false
 }
 
-variable "r2_bucket" {
-  description = "Bucket R2 onde a rotina grava o JSON (não é segredo)."
+variable "bucket" {
+  description = "Bucket onde a rotina publica o JSON; o mesmo de storage.bucket no pipeline-config.json."
   type        = string
-  default     = "secoes"
+  default     = "secoes-comite-popular-tech"
 }
 
 variable "image_keep_count" {

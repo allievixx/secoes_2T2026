@@ -12,7 +12,7 @@ on:
         type: string
         default: ""
       executar:
-        description: "Rodar a rotina uma vez depois do deploy (publica os dados no R2)"
+        description: "Rodar a rotina uma vez depois do deploy (publica o JSON no bucket)"
         type: boolean
         default: true
 
