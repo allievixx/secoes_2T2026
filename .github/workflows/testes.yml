@@ -1,0 +1,83 @@
+# Testes e validações offline do secoes_2T2026.
+#
+# Executa em todo PR e push na branch main.
+# Não necessita de segredos: typecheck, build e suítes de testes.
+
+name: Testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (TypeScript + Vite + Testes)
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Checagem de tipos (TypeScript)
+        run: npm run typecheck
+
+      - name: Testes unitários frontend (Node test runner)
+        run: npm test
+
+      - name: Build de produção
+        run: npm run build
+
+  backend:
+    name: Backend Python (ETL + Trava de Isolamento)
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # O repositório só permite actions do GitHub (e as do Terraform e do Google): o uv vem pelo pip.
+      - name: Sincronizar dependências Python
+        run: |
+          pip install uv==0.7.12
+          uv sync --locked
+
+      - name: Testes unitários da trava de isolamento
+        run: python -m unittest tests.test_conferir_isolamento
+
+      - name: Testes unitários do pipeline ETL
+        run: uv run python -m unittest discover tests
+
+  terraform:
+    name: Terraform (fmt & validate)
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt (confere formatação)
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: terraform init e validate
+        run: |
+          terraform -chdir=infra/terraform init -backend=false -input=false
+          terraform -chdir=infra/terraform validate

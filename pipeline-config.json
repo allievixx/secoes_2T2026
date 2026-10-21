@@ -4,7 +4,7 @@
   "longDistanceEncoding": "utf-8-sig",
   "allowIncomplete": true,
   "storage": {
-    "bucket": "extracao_alteracao_locais_votacao",
+    "bucket": "secoes-comite-popular-tech",
     "object": "secoes_alteradas_2t_2026.json",
     "archivePrefix": "fontes",
     "archiveSources": ["changes"]
