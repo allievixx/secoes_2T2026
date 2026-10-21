@@ -21,7 +21,7 @@ concurrency:
 jobs:
   frontend:
     name: Frontend (TypeScript + Vite + Testes)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
 
   backend:
     name: Backend Python (ETL + Trava de Isolamento)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +66,7 @@ jobs:
 
   terraform:
     name: Terraform (fmt & validate)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
