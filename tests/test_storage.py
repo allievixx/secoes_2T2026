@@ -189,6 +189,75 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(archive_sources({}), ("fontes", ["changes"]))
         self.assertEqual(archive_sources({"archivePrefix": "/raw/", "archiveSources": []}), ("raw", []))
 
+    def test_r2_publish_json_uploads_new_snapshot(self):
+        from io import BytesIO
+        from botocore.exceptions import ClientError
+        from scripts.storage_io import public_url
+
+        extracted_at = datetime(2026, 10, 20, 15, 0, tzinfo=timezone.utc)
+        mock_s3 = Mock()
+        # Simula arquivo não existente (NoSuchKey)
+        mock_s3.get_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+
+        r2_env = {
+            "R2_ACCOUNT_ID": "acc123",
+            "R2_ACCESS_KEY_ID": "key123",
+            "R2_SECRET_ACCESS_KEY": "secret123",
+            "R2_BUCKET_NAME": "dados-r2",
+            "R2_PUBLIC_URL": "https://dados.boralula.com.br",
+        }
+
+        with patch.dict("os.environ", r2_env):
+            with patch("scripts.storage_io.get_r2_client", return_value=mock_s3):
+                result = publish_json([sample_row()], FIELDS, {"object": "secoes.json"}, extracted_at)
+                url = public_url("dados-r2", "secoes.json")
+
+        self.assertEqual(result, "dados-r2/secoes.json")
+        self.assertEqual(url, "https://dados.boralula.com.br/secoes.json")
+        mock_s3.put_object.assert_called_once()
+        kwargs = mock_s3.put_object.call_args.kwargs
+        self.assertEqual(kwargs["Bucket"], "dados-r2")
+        self.assertEqual(kwargs["Key"], "secoes.json")
+        self.assertEqual(kwargs["ContentType"], "application/json; charset=utf-8")
+        self.assertEqual(kwargs["CacheControl"], "public, max-age=60")
+
+        payload = json.loads(kwargs["Body"].decode("utf-8"))
+        self.assertEqual(len(payload["snapshots"]), 1)
+        self.assertEqual(payload["snapshots"][0]["extracted_at"], extracted_at.isoformat())
+
+    def test_r2_publish_json_appends_to_existing_history(self):
+        from io import BytesIO
+        old_extracted = "2026-10-19T10:00:00+00:00"
+        existing_payload = json.dumps({
+            "snapshots": [{
+                "extracted_at": old_extracted,
+                "rows": [sample_row() | {"eleitores": 100}],
+            }]
+        }).encode("utf-8")
+
+        mock_s3 = Mock()
+        mock_s3.get_object.return_value = {"Body": BytesIO(existing_payload)}
+
+        new_extracted = datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc)
+        r2_env = {
+            "R2_ACCOUNT_ID": "acc123",
+            "R2_ACCESS_KEY_ID": "key123",
+            "R2_SECRET_ACCESS_KEY": "secret123",
+            "R2_BUCKET_NAME": "dados-r2",
+        }
+
+        with patch.dict("os.environ", r2_env):
+            with patch("scripts.storage_io.get_r2_client", return_value=mock_s3):
+                result = publish_json([sample_row() | {"eleitores": 200}], FIELDS, {"object": "secoes.json"}, new_extracted)
+
+        self.assertEqual(result, "dados-r2/secoes.json")
+        mock_s3.put_object.assert_called_once()
+        kwargs = mock_s3.put_object.call_args.kwargs
+        payload = json.loads(kwargs["Body"].decode("utf-8"))
+        self.assertEqual(len(payload["snapshots"]), 2)
+        self.assertEqual(payload["snapshots"][0]["extracted_at"], old_extracted)
+        self.assertEqual(payload["snapshots"][1]["extracted_at"], new_extracted.isoformat())
+
 
 if __name__ == "__main__":
     unittest.main()

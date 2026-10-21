@@ -1,0 +1,59 @@
+name: Infra
+
+# Gerencia a infraestrutura do secoes_2T2026 via Terraform.
+# Usa o workflow reutilizável comite-popular-tech/pipelines-compartilhados:
+#   - PR: validação offline (fmt, init sem backend, validate) e plano comentado no PR;
+#   - Push na main: executa o terraform apply no environment "producao";
+#   - Disparo manual: gera o plano (ou executa o apply se a opção "aplicar" for marcada).
+#
+# O estado fica no Google Cloud Storage (backend GCS), acessado via Workload Identity Federation (WIF).
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/infra.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/infra.yml"
+  workflow_dispatch:
+    inputs:
+      aplicar:
+        description: "Aplicar o plano (desmarcado, apenas exibe o plano)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    permissions:
+      contents: read
+      id-token: write      # Workload Identity Federation (WIF)
+      pull-requests: write # Comentário com o plano formatado no PR
+    uses: comite-popular-tech/pipelines-compartilhados/.github/workflows/terraform.yml@23f7a94337d2ae7d4fa17febc28c9ea0c7499b30 # v1
+    with:
+      diretorio: infra/terraform
+      prefixo-estado: secoes
+      repositorio-da-infra: comite-popular-tech/secoes
+      ambiente: producao
+      aplicar: ${{ inputs.aplicar || false }}
+      mostrar-saida: true
+    secrets:
+      env-plano: |
+        TF_VAR_r2_account_id=${{ secrets.R2_ACCOUNT_ID }}
+        TF_VAR_r2_access_key_id=${{ secrets.R2_ACCESS_KEY_ID }}
+        TF_VAR_r2_secret_access_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
+        TF_VAR_r2_bucket_name=${{ secrets.R2_BUCKET_NAME }}
+      env-aplicar: |
+        TF_VAR_r2_account_id=${{ secrets.R2_ACCOUNT_ID }}
+        TF_VAR_r2_access_key_id=${{ secrets.R2_ACCESS_KEY_ID }}
+        TF_VAR_r2_secret_access_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
+        TF_VAR_r2_bucket_name=${{ secrets.R2_BUCKET_NAME }}

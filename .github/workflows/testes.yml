@@ -1,0 +1,98 @@
+# Testes e validações offline do secoes_2T2026.
+#
+# Executa em todo PR e push na branch main.
+# Não necessita de segredos: valida tamanho do PR, lint, typecheck, build e suites de testes.
+
+name: Testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tamanho:
+    name: Tamanho do PR
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: comite-popular-tech/pipelines-compartilhados/acoes/tamanho-do-pr@23f7a94337d2ae7d4fa17febc28c9ea0c7499b30 # v1
+
+  frontend:
+    name: Frontend (TypeScript + Vite + Testes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Checagem de tipos (TypeScript)
+        run: npm run typecheck
+
+      - name: Testes unitários frontend (Node test runner)
+        run: npm test
+
+      - name: Build de produção
+        run: npm run build
+
+  backend:
+    name: Backend Python (ETL + Trava de Isolamento)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.12"
+          enable-cache: true
+
+      - name: Sincronizar dependências Python
+        run: uv sync --locked
+
+      - name: Testes unitários da trava de isolamento
+        run: python -m unittest tests.test_conferir_isolamento
+
+      - name: Testes unitários do pipeline ETL
+        run: uv run python -m unittest discover tests
+
+  terraform:
+    name: Terraform (fmt & validate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt (confere formatação)
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: terraform init e validate
+        run: |
+          terraform -chdir=infra/terraform init -backend=false -input=false
+          terraform -chdir=infra/terraform validate
