@@ -6,6 +6,7 @@ locals {
     "cloudscheduler.googleapis.com",
     "iam.googleapis.com",
     "run.googleapis.com",
+    "secretmanager.googleapis.com",
     "storage.googleapis.com",
   ])
 }
@@ -99,6 +100,27 @@ resource "google_service_account" "scheduler" {
   depends_on   = [google_project_service.apis]
 }
 
+# --- Observabilidade (Grafana Cloud Loki) --------------------------------------
+
+resource "google_secret_manager_secret" "loki_token" {
+  project   = var.project_id
+  secret_id = "${var.name}-loki-token"
+  labels    = local.labels
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret_iam_member" "job_le_loki_token" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.loki_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.job.email}"
+}
+
 resource "google_cloud_run_v2_job" "job" {
   project             = var.project_id
   name                = var.name
@@ -125,6 +147,35 @@ resource "google_cloud_run_v2_job" "job" {
             memory = "2Gi"
           }
         }
+
+        dynamic "env" {
+          for_each = var.loki_url != "" ? [1] : []
+          content {
+            name  = "LOKI_URL"
+            value = var.loki_url
+          }
+        }
+
+        dynamic "env" {
+          for_each = var.loki_user != "" ? [1] : []
+          content {
+            name  = "LOKI_USER"
+            value = var.loki_user
+          }
+        }
+
+        dynamic "env" {
+          for_each = var.loki_url != "" ? [1] : []
+          content {
+            name = "LOKI_TOKEN"
+            value_source {
+              secret_key_ref {
+                secret  = google_secret_manager_secret.loki_token.secret_id
+                version = "latest"
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -137,7 +188,10 @@ resource "google_cloud_run_v2_job" "job" {
     ]
   }
 
-  depends_on = [google_storage_bucket_iam_member.job_publica]
+  depends_on = [
+    google_storage_bucket_iam_member.job_publica,
+    google_secret_manager_secret_iam_member.job_le_loki_token,
+  ]
 }
 
 resource "google_cloud_scheduler_job" "job" {
