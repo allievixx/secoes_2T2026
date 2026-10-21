@@ -30,5 +30,7 @@ export const dayKeyOf = (iso: string): string => {
 export const dayLabelOf = (iso: string): string =>
   new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: TZ }).format(new Date(iso));
 
-export const timeLabelOf = (iso: string): string =>
-  new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: TZ }).format(new Date(iso));
+export const timeLabelOf = (iso: string, includeSeconds = false): string =>
+  new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit", minute: "2-digit", ...(includeSeconds ? { second: "2-digit" } : {}), timeZone: TZ,
+  }).format(new Date(iso));

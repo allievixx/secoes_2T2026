@@ -5,7 +5,7 @@ import { initializeDashboard } from "./dashboard";
 import { groupByDay, latestLoadIndex } from "./snapshot-days";
 import { renderDedicatedTimelineView, renderTimeline } from "./timeline";
 
-const timeLabel = (snapshot: Snapshot) => snapshot.extractedAt ? timeLabelOf(snapshot.extractedAt) : "Único";
+const timeLabel = (snapshot: Snapshot) => snapshot.extractedAt ? timeLabelOf(snapshot.extractedAt, true) : "Horário indisponível";
 
 /**
  * Abas de versões diárias + aba "Linha do tempo". Cada ativação restaura o HTML original do painel
@@ -16,17 +16,13 @@ export function initializeSnapshotTabs(snapshots: Snapshot[], municipalities: Ar
   const tabs = $("snapshot-tabs");
   const panel = $("snapshot-panel");
   const panelTemplate = panel.innerHTML;
+  const selectedLoads = new Map(days.map(day => [day.key, latestLoadIndex(day)]));
 
   const selectTab = (predicate: (tab: HTMLElement) => boolean) => {
     for (const tab of tabs.querySelectorAll<HTMLElement>('[role="tab"]')) {
       const selected = predicate(tab);
       tab.setAttribute("aria-selected", String(selected));
       tab.tabIndex = selected ? 0 : -1;
-    }
-    // O seletor de horário só aparece para o dia ativo; nos demais, confundiria a leitura.
-    for (const select of tabs.querySelectorAll<HTMLSelectElement>(".snapshot-load-select")) {
-      const ownTab = tabs.querySelector<HTMLElement>(`[role="tab"][data-day="${select.dataset.day}"]`);
-      select.hidden = ownTab?.getAttribute("aria-selected") !== "true";
     }
   };
 
@@ -38,10 +34,11 @@ export function initializeSnapshotTabs(snapshots: Snapshot[], municipalities: Ar
     });
   };
 
-  /** Ativa um dia; sem índice explícito, abre a carga mais recente dele. */
+  /** Ativa um dia preservando a extração escolhida; inicialmente, usa a mais recente. */
   const activateDay = (dayKey: string, loadIndex?: number) => {
     const day = days.find(d => d.key === dayKey)!;
-    const index = loadIndex ?? latestLoadIndex(day);
+    const index = loadIndex ?? selectedLoads.get(dayKey) ?? latestLoadIndex(day);
+    selectedLoads.set(dayKey, index);
     const snapshot = day.loads[index];
     selectTab(tab => tab.dataset.day === dayKey);
 
@@ -93,17 +90,22 @@ export function initializeSnapshotTabs(snapshots: Snapshot[], municipalities: Ar
     };
     group.appendChild(tab);
 
-    if (day.loads.length > 1) {
-      const select = document.createElement("select");
-      select.className = "snapshot-load-select";
-      select.dataset.day = day.key;
-      select.setAttribute("aria-label", `Cargas para ${day.label}`);
-      select.onchange = () => activateDay(day.key, Number(select.value));
-      // Prefixo com o dia para o horário nunca parecer pertencer a outra aba.
-      const shortDay = day.label.replace(/\/\d{4}$/, "");
-      day.loads.forEach((load, loadIndex) => select.append(new Option(`${shortDay} · ${timeLabel(load)}`, String(loadIndex))));
-      group.appendChild(select);
-    }
+    const label = document.createElement("label");
+    label.className = "snapshot-load-label";
+    label.textContent = "Extração (Brasília)";
+    const select = document.createElement("select");
+    select.className = "snapshot-load-select";
+    select.dataset.day = day.key;
+    select.setAttribute("aria-label", `Extração de ${day.label} (horário de Brasília)`);
+    select.setAttribute("aria-controls", "snapshot-panel");
+    select.onchange = () => activateDay(day.key, Number(select.value));
+    day.loads.forEach((load, loadIndex) => {
+      const latest = loadIndex === latestLoadIndex(day) ? " · mais recente" : "";
+      select.append(new Option(`${timeLabel(load)}${latest}`, String(loadIndex)));
+    });
+    select.value = String(latestLoadIndex(day));
+    label.appendChild(select);
+    group.appendChild(label);
 
     tabs.append(group);
   });

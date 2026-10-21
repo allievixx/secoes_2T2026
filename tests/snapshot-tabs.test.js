@@ -1,8 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { groupByDay, latestLoadIndex } from "../src/modules/snapshot-days.ts";
+import { timeLabelOf } from "../src/utils/format.ts";
 
 const snap = (extractedAt, dateLabel) => ({ extractedAt, dateLabel, data: { meta: {}, g: [] } });
+
+test("identifica extrações no mesmo minuto com segundos no horário de Brasília", () => {
+  assert.equal(timeLabelOf("2026-10-21T12:15:03Z", true), "09:15:03");
+  assert.equal(timeLabelOf("2026-10-21T12:15:47Z", true), "09:15:47");
+  assert.equal(timeLabelOf("2026-10-21T12:15:03Z"), "09:15");
+});
 
 test("agrupa snapshots por dia no fuso de Brasília, do mais antigo para o mais recente", () => {
   const days = groupByDay([
