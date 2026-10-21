@@ -1,0 +1,5 @@
+.terraform/
+*.tfstate*
+*.local.auto.tfvars
+*_override.tf
+plano*

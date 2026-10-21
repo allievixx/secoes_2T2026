@@ -1,0 +1,335 @@
+name: Cloudflare kadu
+
+# Aplica o Terraform de infra/cloudflare-kadu (o endereço secoes.boralula.org na zona boralula.org, conta kadu da
+# Cloudflare, a de produção). A zona e o DNS compartilhado são do iac-shared; aqui entra só o que é deste repositório.
+# Mesmo desenho do cloudflare-kadu.yml do iac-shared:
+# - todo PR que mexe aqui, inclusive de fork: fmt e validate, sem segredo;
+# - PR de ramo deste repositório: o plano contra a infra real, como comentário no PR (PR de fork não recebe segredo);
+# - push na main: plano e apply; disparo manual, só na main: só o plano, a não ser que "aplicar" esteja
+#   marcado (de outro ramo, nenhum job roda).
+#
+# O estado fica no bucket do Google do comitê, no prefixo secoes/cloudflare-kadu, alcançado por Workload Identity
+# Federation com a conta que o iac cria para este repositório (segredo TF_ESTADO_CONTA), que só alcança secoes/.
+# A conta lê e escreve; o que separa o plano do apply é o token da Cloudflare: o do plano só lê.
+#
+# SEGREDOS (Settings > Secrets and variables > Actions), descritos em infra/cloudflare-kadu/README.md. Os nomes de
+# recursos e os ids também são segredos: não aparecem no código nem nos logs.
+#   TF_ESTADO_CONTA             conta de serviço do estado (criada pelo iac)
+#   TF_ESTADO_BUCKET            bucket do GCS do estado (sem ele, os jobs que tocam a infra real são pulados)
+#   GCP_WIF_PROVIDER            provedor de Workload Identity Federation que aceita este repositório
+#   CLOUDFLARE_KADU_ZONE_ID     id da zona boralula.org
+#   CLOUDFLARE_KADU_PLAN_TOKEN  token da Cloudflare só de leitura (Zone DNS Read), para o plano do PR
+#   CLOUDFLARE_KADU_TOKEN       token da Cloudflare com edição (Zone DNS Edit), para o apply
+# Crie todos ANTES de mesclar: com TF_ESTADO_BUCKET criado, o merge na main já roda o plano e o apply. Criar um segredo
+# depois não dispara execução: rode o workflow à mão na main, com "aplicar".
+# O token e o id entram como variável de ambiente (CLOUDFLARE_API_TOKEN, TF_VAR_zone_id), nunca como -var.
+
+on:
+  pull_request:
+    paths:
+      - infra/cloudflare-kadu/**
+      - .github/workflows/infra-cloudflare-kadu.yml
+  push:
+    branches: [main]
+    paths:
+      - infra/cloudflare-kadu/**
+      - .github/workflows/infra-cloudflare-kadu.yml
+  workflow_dispatch:
+    inputs:
+      aplicar:
+        description: Aplicar o plano (desmarcado, só mostra o plano)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+
+jobs:
+  validar:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: infra/cloudflare-kadu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          # O wrapper troca o terraform por um script de Node, e o runner próprio não tem node no PATH (exit 127).
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -lockfile=readonly
+      - run: terraform validate
+
+  # Segredo não entra no if de um job: este job diz se o TF_ESTADO_BUCKET existe. PR de fork não recebe
+  # segredo; o job nem roda, e os que dependem dele são pulados.
+  configurado:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    outputs:
+      sim: ${{ steps.conferir.outputs.sim }}
+    steps:
+      - id: conferir
+        env:
+          TF_ESTADO_BUCKET: ${{ secrets.TF_ESTADO_BUCKET }}
+        run: |
+          if [ -n "$TF_ESTADO_BUCKET" ]; then echo "sim=true"; else echo "sim=false"; fi >>"$GITHUB_OUTPUT"
+
+  # Plano contra a infra real, publicado como comentário no PR e atualizado a cada push. Só lê a Cloudflare: o
+  # token é o de leitura (CLOUDFLARE_KADU_PLAN_TOKEN), e -lock=false não trava um apply em curso. PR de fork não
+  # recebe token OIDC nem segredo, e fica só com o job "validar".
+  plano:
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.configurado.outputs.sim == 'true'
+    needs: configurado
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # Workload Identity Federation
+      pull-requests: write # comentário com o plano
+    concurrency:
+      group: cloudflare-kadu-plano-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: infra/cloudflare-kadu
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_KADU_PLAN_TOKEN }}
+      TF_VAR_zone_id: ${{ secrets.CLOUDFLARE_KADU_ZONE_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_ESTADO_CONTA }}
+          token_format: access_token # para sondar o estado abaixo
+
+      - name: Conferir os segredos da Cloudflare
+        run: |
+          # O nome na variável de ambiente é o do provider; o segredo, o do repositório.
+          faltam=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || faltam="$faltam CLOUDFLARE_KADU_PLAN_TOKEN"
+          [ -n "$TF_VAR_zone_id" ] || faltam="$faltam CLOUDFLARE_KADU_ZONE_ID"
+          if [ -n "$faltam" ]; then
+            echo "::error::Falta o segredo:$faltam (ver infra/cloudflare-kadu/README.md)."
+            exit 1
+          fi
+
+      # O init do backend gcs cria o estado vazio (e o lock) quando o prefixo ainda não tem estado (-lock=false não
+      # evita: o estado vazio é gravado do mesmo jeito), e o plano de um PR não deve escrever no bucket. Antes do primeiro
+      # apply, o plano parte então de um estado local descartável, na faixa do runner: com o estado vazio, é o mesmo plano
+      # que o primeiro apply faria. Depois do primeiro apply, o estado existe e o plano usa o do bucket.
+      - name: Ver se o estado existe
+        id: estado
+        env:
+          TOKEN: ${{ steps.auth.outputs.access_token }}
+          TF_ESTADO_BUCKET: ${{ secrets.TF_ESTADO_BUCKET }}
+        run: |
+          codigo=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+            "https://storage.googleapis.com/storage/v1/b/$TF_ESTADO_BUCKET/o/secoes%2Fcloudflare-kadu%2Fdefault.tfstate")
+          case "$codigo" in
+            200) echo "existe=true" >>"$GITHUB_OUTPUT" ;;
+            404)
+              echo "existe=false" >>"$GITHUB_OUTPUT"
+              echo "::notice::O estado secoes/cloudflare-kadu ainda não existe: o plano parte de um estado vazio."
+              ;;
+            *)
+              echo "::error::Não consegui ver o estado no bucket (HTTP $codigo)."
+              exit 1
+              ;;
+          esac
+
+      - name: Init
+        env:
+          TF_ESTADO_BUCKET: ${{ secrets.TF_ESTADO_BUCKET }}
+          ESTADO_EXISTE: ${{ steps.estado.outputs.existe }}
+        run: |
+          if [ "$ESTADO_EXISTE" = "true" ]; then
+            terraform init -lockfile=readonly \
+              -backend-config="bucket=$TF_ESTADO_BUCKET" \
+              -backend-config="prefix=secoes/cloudflare-kadu"
+          else
+            # *_override.tf está no .gitignore. O estado local fica só neste job.
+            printf 'terraform {\n  backend "local" {}\n}\n' >backend_override.tf
+            terraform init -lockfile=readonly
+          fi
+
+      - name: Plano
+        id: plano
+        run: |
+          set +e
+          terraform plan -input=false -lock=false -no-color >plano.log 2>&1
+          codigo=$?
+          set -e
+          # As linhas de leitura (Refreshing state...) só fazem barulho no comentário.
+          grep -vE ': (Refreshing state|Reading|Read complete|Preparing import)' plano.log >plano.txt || true
+          cat plano.txt
+          echo "codigo=$codigo" >>"$GITHUB_OUTPUT"
+
+      - name: Comentar no PR
+        if: always() && steps.plano.outputs.codigo != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CODIGO: ${{ steps.plano.outputs.codigo }}
+          SEM_ESTADO: ${{ steps.estado.outputs.existe == 'false' }}
+          TF_VAR_zone_id: ${{ secrets.CLOUDFLARE_KADU_ZONE_ID }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marcador = '<!-- terraform-plan-cloudflare-kadu -->';
+            const ok = process.env.CODIGO === '0';
+            let plano = fs.readFileSync('infra/cloudflare-kadu/plano.txt', 'utf8').trim();
+
+            // O GitHub mascara os segredos no log, mas não no que o script manda para a API: o plano mostra o id da
+            // zona (atributo do registro), e o comentário fica sem ele. Cada linha do segredo vale à parte
+            // (aparado, sem diferença de caixa, em qualquer lugar do texto); o que tem menos de 8 caracteres fica.
+            const segredos = [process.env.TF_VAR_zone_id]
+              .flatMap(v => (v || '').split(/\r?\n/))
+              .map(v => v.trim())
+              .filter(v => v.length >= 8);
+            for (const s of segredos) {
+              plano = plano.replace(new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '***');
+            }
+
+            // Bloco diff: o GitHub colore + e - no começo da linha.
+            plano = plano.split('\n')
+              .map(l => l.replace(/^(\s+)([-+~])/, (_, esp, s) => (s === '~' ? '!' : s) + esp))
+              .join('\n');
+
+            const limite = 60000;
+            const cortado = plano.length > limite;
+            if (cortado) plano = plano.slice(0, limite);
+
+            const resumo = (plano.match(/^\s*(Plan:.*|No changes\..*)$/m) || [])[0];
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const corpo = [
+              marcador,
+              `### ${ok ? '✅' : '❌'} terraform plan (infra/cloudflare-kadu)`,
+              '',
+              ok ? `**${(resumo || '').trim()}**` : 'O plano falhou. O erro está abaixo.',
+              '',
+              `Commit ${context.payload.pull_request.head.sha.slice(0, 7)} · [execução](${run})`,
+              '',
+              process.env.SEM_ESTADO === 'true'
+                ? '_O estado `secoes/cloudflare-kadu` ainda não existe no bucket: o plano partiu de um estado vazio. O primeiro apply, na `main`, o cria._\n'
+                : '',
+              '<details><summary>Plano completo</summary>',
+              '',
+              '```diff',
+              plano,
+              '```',
+              cortado ? '\n_Plano cortado. A versão inteira está no log da execução._' : '',
+              '</details>',
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comentarios = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const anterior = comentarios.find(c => c.body && c.body.startsWith(marcador));
+            if (anterior) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: anterior.id, body: corpo });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: corpo });
+            }
+
+      - name: Falhar se o plano falhou
+        if: steps.plano.outputs.codigo != '0'
+        run: exit 1
+
+  aplicar:
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
+      needs.configurado.outputs.sim == 'true'
+    needs: configurado
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # Workload Identity Federation
+    # Um apply de cada vez, e nenhum é cancelado no meio.
+    concurrency:
+      group: cloudflare-kadu
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: infra/cloudflare-kadu
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_KADU_TOKEN }}
+      TF_VAR_zone_id: ${{ secrets.CLOUDFLARE_KADU_ZONE_ID }}
+      APLICAR: ${{ github.event_name == 'push' || inputs.aplicar }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_ESTADO_CONTA }}
+
+      - name: Conferir os segredos da Cloudflare
+        run: |
+          # O nome na variável de ambiente é o do provider; o segredo, o do repositório.
+          faltam=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || faltam="$faltam CLOUDFLARE_KADU_TOKEN"
+          [ -n "$TF_VAR_zone_id" ] || faltam="$faltam CLOUDFLARE_KADU_ZONE_ID"
+          if [ -n "$faltam" ]; then
+            echo "::error::Falta o segredo:$faltam (ver infra/cloudflare-kadu/README.md)."
+            exit 1
+          fi
+
+      - run: >-
+          terraform init -lockfile=readonly
+          -backend-config="bucket=$TF_ESTADO_BUCKET"
+          -backend-config="prefix=secoes/cloudflare-kadu"
+        env:
+          TF_ESTADO_BUCKET: ${{ secrets.TF_ESTADO_BUCKET }}
+
+      - name: Plano
+        run: terraform plan -input=false -out=plano
+
+      # Esta raiz só cria e ajusta registros: um recurso apagado ou recriado (replace) é erro, e o plano para aqui, antes do apply.
+      # Lê o plano em JSON com jq (os runners próprios têm). Falha fechado: sem jq, ou com um JSON que não dá para ler,
+      # o passo para e nada é aplicado.
+      - name: Recusar apagar ou recriar
+        run: |
+          set -o pipefail
+          command -v jq >/dev/null || { echo "::error::jq não encontrado no runner; por segurança, não aplico."; exit 1; }
+          terraform show -json plano >plano.json
+          if ! jq -e 'has("format_version")' plano.json >/dev/null; then
+            echo "::error::Não consegui ler o plano em JSON; por segurança, não aplico."
+            exit 1
+          fi
+          apagam=$(jq -r '[.resource_changes[]? | select(.change.actions | index("delete")) | .address] | join(", ")' plano.json)
+          if [ -n "$apagam" ]; then
+            echo "::error::O plano apaga ou recria: $apagam"
+            exit 1
+          fi
+
+      - name: Aplicar
+        if: env.APLICAR == 'true'
+        run: terraform apply -input=false plano
