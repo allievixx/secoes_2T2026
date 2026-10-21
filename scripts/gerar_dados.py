@@ -237,11 +237,12 @@ def load_ibge(path: Path, overrides: dict[str, int]) -> dict[tuple[str, str], in
     return result
 
 
-def load_registry(path: Path, changes: dict[Section, dict[str, str]], encoding: str, year: int):
+def load_registry(path: Path, changes: dict[Section, dict[str, str]], encoding: str, year: int, allow_incomplete: bool = False):
     wanted = {(k[0], k[1], k[2]) for k in changes}
     sections: dict[Section, dict[str, str]] = {}
     locations: dict[tuple[str, str, int, str], list[dict[str, str]]] = defaultdict(list)
     names: dict[Section, set[Section]] = defaultdict(set)
+    conflicts: set[Section] = set()
     # Assinaturas (nome, endereço, bairro, ponto) por local, em qualquer turno, para achar um local citado só
     # nas colunas *_ORIGINAL. A chave inclui a zona: NR_LOCAL_VOTACAO se repete entre zonas do mesmo município.
     places: dict[tuple[str, str, int, str], set[tuple[str, str, str, tuple[float, float] | None]]] = defaultdict(set)
@@ -261,11 +262,21 @@ def load_registry(path: Path, changes: dict[Section, dict[str, str]], encoding: 
             continue
         if old is None or rank > integer(old["NR_TURNO"], "NR_TURNO"):
             sections[k] = row
+            conflicts.discard(k)
         elif rank == integer(old["NR_TURNO"], "NR_TURNO") and any(old[c] != row[c] for c in REGISTRY - {"NR_TURNO"}):
-            raise DataError(f"Cadastro conflitante para seção: {k}")
+            if not allow_incomplete:
+                raise DataError(f"Cadastro conflitante para seção: {k}")
+            conflicts.add(k)
+    for k in conflicts:
+        # Preservar a identidade para cruzar votos, mas nunca escolher um dos locais conflitantes.
+        selected = sections[k]
+        sections[k] = {c: selected[c] if c in {"AA_ELEICAO", "NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NM_MUNICIPIO", "NR_ZONA", "NR_SECAO"} else "" for c in REGISTRY}
+        sections[k]["_CADASTRO_CONFLITANTE"] = "1"
     # Uma entrada por local, em vez de todas as seções, mantém índices pequenos.
     seen: set[tuple[Any, ...]] = set()
     for k, row in sections.items():
+        if k in conflicts:
+            continue
         identity = (*k[:3], row["NR_LOCAL_VOTACAO"], row["NM_LOCAL_VOTACAO"], row["DS_ENDERECO"], row["NR_LATITUDE"], row["NR_LONGITUDE"])
         if identity not in seen:
             seen.add(identity)
@@ -389,6 +400,14 @@ def build_rows(changes, sections, locations, names, ibge, results, distances, pl
             raise DataError(f"Seção sem correspondência única no cadastro TSE: {named}")
         k = next(iter(candidates))
         registry = sections[k]
+        if registry.get("_CADASTRO_CONFLITANTE"):
+            issues.append(f"{named}: cadastro conflitante; endereço, coordenadas e distância mantidos vazios")
+            if k in results:
+                row.update(results[k])
+            else:
+                issues.append(f"{named}: resultado de presidente no 1º turno incompleto/ausente")
+            output.append(row)
+            continue
         final_candidates = locations.get((*k[:3], normalize(row["local_2t"])), [])
         final = registry if normalize(registry["NM_LOCAL_VOTACAO"]) == normalize(row["local_2t"]) else find_location(final_candidates, str(named)+" final")
         original_id = registry["NR_LOCAL_VOTACAO_ORIGINAL"]
@@ -503,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
         # Enriquecimento adiado pelo usuário: ausências viram NULL, sem bloquear a carga.
         distances = load_distances(source("longDistance"), config.get("longDistanceEncoding", "utf-8-sig")) if sources.get("longDistance") else {}
         ibge = load_ibge(source("municipalities"), config.get("ibgeOverrides", {}))
-        sections, locations, names, places = load_registry(source("registry"), changes, encoding, year)
+        sections, locations, names, places = load_registry(source("registry"), changes, encoding, year, allow_incomplete=allow_incomplete)
         wanted = {next(iter(names[k])) for k in changes if len(names.get(k, set())) == 1}
         candidates = config.get("candidates", {"lula":"13", "flavio":"22"})
         lula, flavio = str(integer(str(candidates["lula"]), "candidates.lula")), str(integer(str(candidates["flavio"]), "candidates.flavio"))
