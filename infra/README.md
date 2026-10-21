@@ -20,10 +20,10 @@ privados, e este repositório é público. O Actions daqui só usa a conta de de
 
 ## Primeira vez
 
-1. `terraform -chdir=infra/terraform init && terraform -chdir=infra/terraform apply`. O Job nasce com uma imagem
-   pública de exemplo e o Scheduler nasce pausado.
+1. `terraform -chdir=infra/terraform init && terraform -chdir=infra/terraform apply -var agendar=false`. O Job nasce
+   com uma imagem pública de exemplo e o Scheduler nasce pausado.
 2. Rode o workflow *Deploy da rotina* na `main`: ele publica a imagem, troca a do Job e roda a rotina uma vez.
-3. Quando a rotina gerar a lista atual do TSE, ligue o agendamento: `apply -var agendar=true`.
+3. Quando a rotina gerar a lista atual do TSE, ligue o agendamento: `apply` (o padrão de `agendar` é `true`).
 
 ## Depois
 

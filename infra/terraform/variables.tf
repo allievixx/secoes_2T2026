@@ -26,9 +26,9 @@ variable "schedule" {
 }
 
 variable "agendar" {
-  description = "Liga o Scheduler. Deixe desligado até a rotina gerar a lista atual do TSE: cada execução fica no histórico do JSON."
+  description = "Liga o Scheduler. Ligado desde 21/10, quando a rotina gerou a lista atual do TSE. Numa instalação nova, use false até isso acontecer: cada execução fica no histórico do JSON."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "bucket" {
