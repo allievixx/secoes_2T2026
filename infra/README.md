@@ -1,97 +1,42 @@
-# Infraestrutura e CI/CD de Seções 2º Turno 2026 (GCP + Cloudflare R2)
+# Infraestrutura da rotina de dados (GCP + Cloudflare R2)
 
-Infraestrutura como código (**Terraform**) e automação (**GitHub Actions**) para hospedar e executar a rotina de dados de seções eleitorais alteradas no 2º turno das Eleições 2026.
-
-Integrado ao ecossistema corporativo da organização **[`comite-popular-tech/pipelines-compartilhados`](https://github.com/comite-popular-tech/pipelines-compartilhados)**:
-- **IaC versionado** em `infra/terraform/` (`>= 1.6`, Google Provider `~> 6.0`).
-- **Workflow reutilizável de Terraform:** Chama diretamente `comite-popular-tech/pipelines-compartilhados/.github/workflows/terraform.yml@v1`.
-- **Autenticação segura via Workload Identity Federation (WIF):** Sem necessidade de chaves JSON estáticas de contas de serviço.
-- **Proteção de Forks:** Em pull requests de forks, apenas a validação offline (`fmt` e `validate`) executa; a infraestrutura real e os segredos nunca são expostos.
-- **Segredos fora do Git:** As credenciais do Cloudflare R2 residem com segurança no **GCP Secret Manager** e são montadas como variáveis de ambiente no container.
-
----
-
-## Arquitetura
+A rotina (`scripts/gerar_dados.py`) roda como Cloud Run Job no projeto `thech-against-bozo` e grava o JSON num
+bucket R2. O front continua no GitHub Pages.
 
 ```
-┌────────────────────────────────────────┐
-│ Cloudflare (R2)                        │
-│   • Bucket R2 Privado                  │
-│   • Custom Domain / CDN Proxy          │
-└───────────────────▲────────────────────┘
-                    │ Grava JSON via S3 API
-┌───────────────────┴────────────────────┐      ┌─────────────────────────┐
-│ GCP (Cloud Run Jobs: thech-against-bozo│◄─────│ Cloud Scheduler         │
-│   • Imagem Docker (Python 3.11 + uv)   │      │   • 4x ao dia           │
-│   • 2 GiB RAM / 1 vCPU                 │      │   • America/Sao_Paulo   │
-│   • Segredos R2 via Secret Manager     │      └─────────────────────────┘
-└────────────────────────────────────────┘
+Cloud Scheduler (06:30, 11:30, 15:30, 20:30, America/Sao_Paulo)
+  └─> Cloud Run Job "secoes" (1 vCPU, 2 GiB, até 1 h; credenciais do R2 pelo Secret Manager)
+        └─> R2 "secoes": secoes_alteradas_2t_2026.json e fontes/
+              └─> domínio público de leitura, com CORS para o Pages
 ```
 
----
+| Onde | O que | Quem aplica |
+| --- | --- | --- |
+| `infra/terraform/` | Artifact Registry, Job, Scheduler, segredos (sem valor), contas e o provider de WIF | à mão, dono do projeto |
+| `.github/workflows/deploy.yml` | build da imagem, troca da imagem do Job e uma execução | à mão (workflow_dispatch) |
+| Cloudflare (painel) | bucket R2, domínio de leitura, CORS e o token de escrita | à mão, conta da Cloudflare |
 
-## Estrutura de Pastas
+Por que a raiz não roda no CI: os módulos do `iac-shared` e o `terraform.yml` do `pipelines-compartilhados` são
+privados, e este repositório é público. O Actions daqui só usa a conta de deploy, que não mexe em IAM.
 
-```
-infra/
-  README.md            este documento
-  terraform/           definição dos recursos (Cloud Run Job, Scheduler, Secret Manager, Artifact Registry)
-    main.tf
-    variables.tf
-    outputs.tf
-    versions.tf
-    .terraform.lock.hcl (sempre versionado no Git)
-tools/
-  conferir_isolamento.py   trava de segurança contra targets de produção indevidos
-tests/
-  test_conferir_isolamento.py   testes unitários da trava
-.github/workflows/
-  testes.yml           action tamanho-do-pr + lint + typecheck + testes frontend e python (sem segredos)
-  infra.yml            chama o workflow reutilizável terraform.yml de pipelines-compartilhados
-  pages.yml            deploy contínuo do frontend estático no GitHub Pages
-```
+## Primeira vez
 
----
+1. **Cloudflare:** crie o bucket R2 `secoes`, ligue um domínio público de leitura a ele e a regra de CORS (GET da
+   origem do Pages). Gere um token de API do R2 com *Object Read & Write* só nesse bucket.
+2. **Segredos (vazios):**
+   `terraform -chdir=infra/terraform init && terraform -chdir=infra/terraform apply -target=google_secret_manager_secret.r2`
+3. **Valores dos segredos**, um por vez, colando o valor quando o terminal pedir (nada vai para o estado nem para o
+   histórico do shell):
+   `gcloud secrets versions add secoes-r2-account-id --project=thech-against-bozo --data-file=-`
+   (o mesmo para `secoes-r2-access-key-id` e `secoes-r2-secret-access-key`; termine cada um com Ctrl+D).
+4. **O resto:** `terraform -chdir=infra/terraform apply`. O Job nasce com uma imagem pública de exemplo e o
+   Scheduler nasce pausado.
+5. **Deploy:** rode o workflow *Deploy da rotina* na `main`. Ele publica a imagem, troca a do Job e roda a rotina
+   uma vez.
+6. **Agendamento:** quando a rotina gerar a lista atual do TSE, aplique com `-var agendar=true`.
 
-## O que o Terraform cria (`infra/terraform/`)
+## Depois
 
-| Recurso | Arquivo | Descrição |
-|---|---|---|
-| Artifact Registry | `main.tf` | Repositório Docker para as imagens do job `secoes-etl` |
-| Service Account Job | `main.tf` | Identidade do container com permissão `roles/secretmanager.secretAccessor` |
-| Service Account Scheduler | `main.tf` | Identidade do agendador com permissão `roles/run.invoker` |
-| Secret Manager | `main.tf` | 4 segredos (`r2-account-id`, `r2-access-key-id`, `r2-secret-access-key`, `r2-bucket-name`) |
-| Cloud Run Job v2 | `main.tf` | Job com 2 GiB de memória, timeout de 1h e segredos montados como variáveis de ambiente |
-| Cloud Scheduler | `main.tf` | Agendamento às 06:30, 11:30, 15:30 e 20:30 (`America/Sao_Paulo`) via HTTP POST autenticado |
-
----
-
-## Variáveis e Segredos (Configuração no GitHub)
-
-O pipeline usa as variáveis corporativas da organização `comite-popular-tech`:
-- `TF_ESTADO_BUCKET`: Nome do bucket GCS para armazenar o estado do Terraform (`prefix=secoes`).
-- `GCP_WIF_PROVIDER`: Provider do Workload Identity Federation (`projects/.../locations/global/workloadIdentityPools/.../providers/...`).
-- `GCP_SA_TERRAFORM_PLANO`: Conta de serviço para executar o plano em PRs.
-- `GCP_SA_TERRAFORM`: Conta de serviço com permissão de escrita para o apply na branch `main`.
-
-No Environment **`producao`**:
-- `R2_ACCOUNT_ID`
-- `R2_ACCESS_KEY_ID`
-- `R2_SECRET_ACCESS_KEY`
-- `R2_BUCKET_NAME`
-
----
-
-## Validações Locais
-
-```bash
-# Validar formatação do Terraform
-terraform fmt -check -recursive infra/terraform
-
-# Validar sintaxe
-terraform -chdir=infra/terraform init -backend=false
-terraform -chdir=infra/terraform validate
-
-# Testar a trava de isolamento
-python3 -m unittest tests/test_conferir_isolamento.py
-```
+- Código da rotina mudou: rode o *Deploy da rotina* (vazio = topo da `main`; um commit antigo volta atrás).
+- Infra mudou: `terraform plan` e `apply` à mão, por quem é dono do projeto.
+- Token do R2 trocado: só o passo 3, com o valor novo; a próxima execução já usa a versão `latest`.

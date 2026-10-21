@@ -1,20 +1,23 @@
-# Infraestrutura de secoes_2T2026 gerenciada pelo Terraform.
-# Integrada com o workflow reutilizável comite-popular-tech/pipelines-compartilhados.
+# Infraestrutura do secoes no projeto da org, aplicada à mão por quem é dono do projeto (infra/README.md).
+# O CI só publica a imagem e troca a do Job (.github/workflows/deploy.yml), com a conta de deploy daqui.
 #
-# O estado fica no Google Cloud Storage (backend "gcs"), recebendo
-# bucket e prefixo dinamicamente pelo pipeline via -backend-config.
+# Os módulos do iac-shared e o terraform.yml do pipelines-compartilhados são privados, e este repositório
+# é público: o Actions daqui não os alcança. Por isso a raiz é escrita aqui, no desenho do post-to-data.
 
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.6"
 
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 6.0"
+      version = "~> 6.10"
     }
   }
 
-  backend "gcs" {}
+  backend "gcs" {
+    bucket = "comite-popular-tech-terraform"
+    prefix = "secoes"
+  }
 }
 
 provider "google" {

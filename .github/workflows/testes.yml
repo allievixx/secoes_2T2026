@@ -1,7 +1,7 @@
 # Testes e validações offline do secoes_2T2026.
 #
 # Executa em todo PR e push na branch main.
-# Não necessita de segredos: valida tamanho do PR, lint, typecheck, build e suites de testes.
+# Não necessita de segredos: typecheck, build e suítes de testes.
 
 name: Testes
 
@@ -19,18 +19,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tamanho:
-    name: Tamanho do PR
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: comite-popular-tech/pipelines-compartilhados/acoes/tamanho-do-pr@23f7a94337d2ae7d4fa17febc28c9ea0c7499b30 # v1
-
   frontend:
     name: Frontend (TypeScript + Vite + Testes)
     runs-on: ubuntu-latest
@@ -64,14 +52,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Instalar uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          version: "0.7.12"
-          enable-cache: true
-
+      # O repositório só permite actions do GitHub (e as do Terraform e do Google): o uv vem pelo pip.
       - name: Sincronizar dependências Python
-        run: uv sync --locked
+        run: |
+          pip install uv==0.7.12
+          uv sync --locked
 
       - name: Testes unitários da trava de isolamento
         run: python -m unittest tests.test_conferir_isolamento
