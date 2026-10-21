@@ -102,6 +102,49 @@ class PipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(DataError, "duplicada"):
             load_changes(self.source("duplicate.csv", [changed(), changed()]), "cp1252", 2026)
 
+    def test_registry_different_turns_selects_second_in_either_order(self):
+        changes = load_changes(self.source("changes.csv", [changed()]), "cp1252", 2026)
+        first = registry(NR_TURNO="1", NR_LOCAL_VOTACAO="1627", DS_ENDERECO="Rua A",
+                         NR_LATITUDE="-25,3430183", NR_LONGITUDE="-49,2529433")
+        second = registry(NR_LOCAL_VOTACAO="1635", DS_ENDERECO="Rua A, S/N",
+                          NR_LATITUDE="-1", NR_LONGITUDE="-1")
+        for records in ([first, second], [second, first], [second, second, first]):
+            with self.subTest(turns=[r["NR_TURNO"] for r in records]):
+                sections, _, _, _ = load_registry(self.source("registry.csv", records), changes, "cp1252", 2026)
+                self.assertEqual(sections[("AL", "27596", 20, 1)], second)
+
+    def test_registry_same_turn_conflict_strict_mode_still_fails(self):
+        changes = load_changes(self.source("changes.csv", [changed()]), "cp1252", 2026)
+        source = self.source("conflicting.csv", [registry(), registry(DS_ENDERECO="Outro endereço")])
+        with self.assertRaises(DataError) as caught:
+            load_registry(source, changes, "cp1252", 2026)
+        message = str(caught.exception)
+        self.assertIn("Cadastro conflitante para seção: ('AL', '27596', 20, 1)", message)
+
+    def test_registry_conflict_partial_mode_preserves_section_and_votes_without_location(self):
+        for records in ([registry(), registry(DS_ENDERECO="Outro endereço")],
+                        [registry(DS_ENDERECO="Outro endereço"), registry()]):
+            changes = load_changes(self.source("changes.csv", [changed()]), "cp1252", 2026)
+            sections, locations, names, places = load_registry(
+                self.source("registry.csv", records), changes, "cp1252", 2026, allow_incomplete=True)
+            k = ("AL", "27596", 20, 1)
+            rows, issues = build_rows(changes, sections, locations, names,
+                                     {("AL", "CAMPOGRANDE"):2701506}, {k:{"aptos_1t":350}}, {}, places)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["eleitores"], 400)
+            self.assertEqual(rows[0]["aptos_1t"], 350)
+            self.assertEqual(rows[0]["local_2t"], "Escola Nova")
+            for field in ("endereco_1t", "endereco_2t", "lat_1t", "lon_1t", "lat_2t", "lon_2t", "distancia_km"):
+                self.assertEqual(rows[0][field], "")
+            self.assertIn("cadastro conflitante", issues[0])
+            self.assertFalse(locations)
+
+    def test_registry_second_turn_supersedes_partial_first_turn_conflict(self):
+        changes = load_changes(self.source("changes.csv", [changed()]), "cp1252", 2026)
+        records = [registry(NR_TURNO="1"), registry(NR_TURNO="1", DS_ENDERECO="Outro"), registry()]
+        sections, _, _, _ = load_registry(self.source("registry.csv", records), changes, "cp1252", 2026, allow_incomplete=True)
+        self.assertEqual(sections[("AL", "27596", 20, 1)], registry())
+
     def test_ibge_gzip_and_immediate_region_fallback(self):
         rows = municipalities()
         rows[0]["microrregiao"] = None
