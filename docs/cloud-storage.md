@@ -16,6 +16,14 @@ O TSE sobrescreve seus ZIPs na mesma URL, então a versão usada em cada carga s
 
 Há uma cópia por versão: se um objeto com o mesmo SHA-256 (metadado `sha256`) já existe na pasta, nada é reenviado. Os metadados do objeto guardam URL de origem, `Last-Modified`, `ETag` e instante do download. O caminho arquivado entra em `sources.<fonte>.archived` no snapshot e em `source_versions` no relatório. Uma falha no arquivamento é registrada em `falhas_arquivamento` no relatório e no log, mas não impede a publicação do dashboard. Como o bucket é público, as cópias também são — são dados públicos do TSE.
 
+### Catálogo IBGE versionado
+
+`sources.municipalities` aponta explicitamente para a cópia de 22/10/2026 no Cloud Storage, em `fontes/municipalities/20261022-d9eec8439bc8c5dc2f7db6332a8e5569f5a3f637988e26aebc513412d4069d5c-municipios.json`. O catálogo foi obtido da API oficial por HTTPS, validado com `load_ibge` (5.571 códigos únicos e 27 UFs) e publicado sem sobrescrever um objeto existente.
+
+O SHA-256 é `d9eec8439bc8c5dc2f7db6332a8e5569f5a3f637988e26aebc513412d4069d5c`. Os metadados do objeto registram a URL oficial de origem, data de coleta, hash e contagens. O snapshot registra a URL da cópia e o hash efetivamente baixado em `sources.municipalities`.
+
+A rotina não consulta a API do IBGE em cada execução nem faz fallback silencioso. Se a cópia estiver inacessível ou inválida, a publicação falha. A descoberta da fonte vigente do TSE permanece inalterada. Para atualizar o catálogo, obtenha uma nova cópia oficial, valide os códigos e UFs, publique em outro caminho com data e hash e altere explicitamente `sources.municipalities` antes do deploy. Não sobrescreva a versão anterior.
+
 [dashboard-config.json](../dashboard-config.json) aponta para a URL pública do objeto. O bucket permite leitura pública e CORS `GET` para o GitHub Pages e para os servidores locais `http://localhost:8080` e `http://127.0.0.1:8080`, configurados em [storage-cors.json](../storage-cors.json). A configuração atual do bucket informa `public_access_prevention: inherited`; a política efetiva do projeto não impõe prevenção, mas confirme esse estado se a política da organização mudar. Não publique dados que não possam ser públicos.
 
 ## Ambiente local
