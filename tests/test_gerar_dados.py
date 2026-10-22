@@ -4,9 +4,11 @@ import csv
 import gzip
 import io
 import json
+import ssl
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 import zipfile
 
@@ -95,6 +97,20 @@ class PipelineTest(unittest.TestCase):
             archive.writestr("cadastro_AL.csv", csv_bytes([registry()]))
             archive.writestr("cadastro_BRASIL.csv", csv_bytes([registry()]))
         self.assertEqual(len(list(iter_csv(path, REGISTRY))), 1)
+
+    def test_changes_excludes_national_rows_without_destination_and_logs_count(self):
+        rows = [changed(), changed("2", NM_LOCAL_VOTACAO_FINAL=""),
+                changed("3", NM_LOCAL_VOTACAO_FINAL="   "),
+                changed("4", NM_LOCAL_VOTACAO_FINAL="", SG_UF="ZZ")]
+        with self.assertLogs("gerar_dados", level="INFO") as logs:
+            changes = load_changes(self.source("national.csv", rows), "cp1252", 2026)
+        self.assertEqual(list(changes), [("AL", "CAMPOGRANDE", 20, 1)])
+        self.assertIn("3 seções sem local final", logs.output[-1])
+        self.assertIn("1 alterações com destino informado", logs.output[-1])
+
+    def test_changes_without_any_destination_preserves_empty_publication_guard(self):
+        with self.assertRaisesRegex(DataError, "Nenhuma seção alterada"):
+            load_changes(self.source("empty.csv", [changed(NM_LOCAL_VOTACAO_FINAL="")]), "cp1252", 2026)
 
     def test_invalid_schema_and_duplicate_changes(self):
         with self.assertRaisesRegex(DataError, "colunas ausentes"):
@@ -189,6 +205,35 @@ class PipelineTest(unittest.TestCase):
         self.assertFalse(issues)
         self.assertEqual(rows[0]["regiao_longe_da_urna"], "")
 
+    def test_ambiguous_locations_partial_mode_preserves_votes_and_safe_fields(self):
+        for old in (True, False):
+            with self.subTest(old=old):
+                records = [registry(), registry("2", old=True)]
+                if old:
+                    records.append(registry("3", old=True, NR_LATITUDE="-9.80"))
+                else:
+                    records[0] = registry(NM_LOCAL_VOTACAO="Outro local")
+                    records.extend([registry("3"), registry("4", NR_LATITUDE="-9.80")])
+                changes, sections, locations, names, ibge, results, places = self.fixtures(registry_rows=records)
+                with self.assertRaisesRegex(DataError, "Local ambíguo"):
+                    build_rows(changes, sections, locations, names, ibge, results, {}, places)
+                rows, issues = build_rows(
+                    changes, sections, locations, names, ibge, results, {}, places,
+                    allow_incomplete=True)
+                self.assertEqual(len(rows), 1)
+                row = rows[0]
+                self.assertEqual(row["eleitores"], 400)
+                self.assertEqual(row["lula_1t"], 150)
+                self.assertEqual(row["distancia_km"], "")
+                ambiguous, safe = ("1t", "2t") if old else ("2t", "1t")
+                self.assertEqual(row[f"lat_{ambiguous}"], "")
+                self.assertEqual(row[f"lon_{ambiguous}"], "")
+                self.assertNotEqual(row[f"lat_{safe}"], "")
+                self.assertTrue(any("Local ambíguo" in issue for issue in issues))
+                if not old:
+                    self.assertEqual(row["endereco_2t"], "")
+                    self.assertEqual(row["bairro_2t"], "")
+
     def stale_registry(self, **overrides):
         """Linha de 2º turno que o TSE ainda não atualizou: local atual é o antigo e o novo está só em *_ORIGINAL."""
         return registry(old=True, NR_LOCAL_VOTACAO_ORIGINAL="20", NM_LOCAL_VOTACAO_ORIGINAL="Escola Nova",
@@ -267,6 +312,58 @@ class PipelineTest(unittest.TestCase):
         local.write_bytes(payload)
         self.assertEqual(source_version(local), {"sha256": version["sha256"], "bytes": len(payload)})
 
+    def test_download_retries_ssl_handshake_timeout_then_succeeds(self):
+        response = io.BytesIO(b"complete")
+        response.headers = {"Content-Length": "8"}
+        failure = urllib.error.URLError(TimeoutError("The handshake operation timed out"))
+        with patch("scripts.gerar_dados.urllib.request.urlopen", side_effect=[failure, response]) as opened, \
+             patch("scripts.gerar_dados.time.sleep") as sleep, \
+             self.assertLogs("gerar_dados", level="WARNING") as logs:
+            path = download("https://example.test/source.zip", self.root / "cache")
+        self.assertEqual(path.read_bytes(), b"complete")
+        self.assertEqual(opened.call_count, 2)
+        sleep.assert_called_once_with(2)
+        self.assertIn("tentativa 1/3", logs.output[0])
+        self.assertIn("https://example.test/source.zip", logs.output[0])
+        self.assertEqual(source_version(path)["bytes"], 8)
+
+    def test_download_timeout_exhaustion_preserves_cache_and_cleans_partial_files(self):
+        cache = self.root / "cache"
+        cache.mkdir()
+        source = "https://example.test/source.zip"
+        destination = cache / (__import__("hashlib").sha256(source.encode()).hexdigest()[:16] + "-source.zip")
+        destination.write_bytes(b"previous")
+        metadata = destination.with_name(destination.name + ".meta.json")
+        metadata.write_text('{"sha256":"previous"}')
+        response = io.BytesIO(b"partial")
+        response.headers = {}
+        response.read = unittest.mock.Mock(side_effect=[b"partial", TimeoutError("read timed out")])
+        with patch("scripts.gerar_dados.urllib.request.urlopen",
+                   side_effect=[response, TimeoutError("timed out"), TimeoutError("timed out")]) as opened, \
+             patch("scripts.gerar_dados.time.sleep") as sleep, \
+             self.assertLogs("gerar_dados", level="WARNING"):
+            with self.assertRaises(TimeoutError):
+                download(source, cache, refresh=True)
+        self.assertEqual(opened.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [unittest.mock.call(2), unittest.mock.call(4)])
+        self.assertEqual(destination.read_bytes(), b"previous")
+        self.assertEqual(metadata.read_text(), '{"sha256":"previous"}')
+        self.assertEqual(set(cache.iterdir()), {destination, metadata})
+
+    def test_download_does_not_retry_certificate_or_http_errors(self):
+        failures = [
+            urllib.error.URLError(ssl.SSLCertVerificationError("invalid certificate")),
+            urllib.error.HTTPError("https://example.test/source.zip", 404, "Not Found", {}, None),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure), \
+                 patch("scripts.gerar_dados.urllib.request.urlopen", side_effect=failure) as opened, \
+                 patch("scripts.gerar_dados.time.sleep") as sleep:
+                with self.assertRaises(urllib.error.URLError):
+                    download("https://example.test/source.zip", self.root / "cache")
+                self.assertEqual(opened.call_count, 1)
+                sleep.assert_not_called()
+
     def test_results_turn_office_filter_and_duplicate_protection(self):
         counts = {"13":150, "22":100, "12":20, "95":5, "96":5}
         rows = [election(NR_VOTAVEL=n, QT_VOTOS=str(q)) for n,q in counts.items()]
@@ -290,7 +387,7 @@ class PipelineTest(unittest.TestCase):
         (self.root / "ibge.json").write_text(json.dumps(municipalities()), encoding="utf-8")
         self.source("long.csv", [{"UF":"AL", "CD_MUNICIPIO":"27596", "ZONA":"20", "NR_LOCAL_VOTACAO":"20", "DISTANCIA_MEDIA_KM":"5"}])
         config = self.root / "config.json"
-        config.write_text(json.dumps({"storage":{"bucket":"test-bucket","object":"snapshot.json"},"sources":{
+        config.write_text(json.dumps({"storage":{"bucket":"test-bucket","object":"snapshot.json","archiveSources":["changes"]},"sources":{
             "changes":"changes.zip", "registry":"registry.zip", "votes":"votes.zip", "details":"details.zip",
             "municipalities":"ibge.json", "longDistance":"long.csv",
         }}), encoding="utf-8")
@@ -345,10 +442,11 @@ class PipelineTest(unittest.TestCase):
             "uf":"PE", "municipio":"Recife", "cd_ibge":2611606, "zona":3,
             "secao":735, "eleitores":250,
         }
-        with patch("scripts.gerar_dados.build_rows",return_value=([incomplete_row],["Missing final location"])), \
+        with patch("scripts.gerar_dados.build_rows",return_value=([incomplete_row],["Missing final location"])) as mocked_build, \
              patch("scripts.gerar_dados.archive_source",return_value="test-bucket/fontes/changes/x.zip"), \
              patch("scripts.gerar_dados.publish_json",return_value="test-bucket/snapshot.json") as mocked_json:
             self.assertEqual(main(["--config",str(config),"--report",str(report)]),0)
+            self.assertTrue(mocked_build.call_args.kwargs["allow_incomplete"])
             self.assertEqual(mocked_json.call_args.args[0],[incomplete_row])
             saved_report = json.loads(report.read_text())
             self.assertTrue(saved_report["allow_incomplete"])

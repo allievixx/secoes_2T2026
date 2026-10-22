@@ -48,11 +48,15 @@ gcloud storage buckets add-iam-policy-binding gs://extracao_alteracao_locais_vot
 gcloud storage buckets add-iam-policy-binding gs://extracao_alteracao_locais_votacao --member=allUsers --role=roles/storage.objectViewer
 gcloud storage buckets update gs://extracao_alteracao_locais_votacao --cors-file=storage-cors.json
 gcloud builds submit --tag $IMAGE .
-gcloud run jobs deploy secoes-etl --image $IMAGE --region $REGION --service-account $SERVICE_ACCOUNT --task-timeout 1h
+gcloud run jobs deploy secoes-etl --image $IMAGE --region $REGION --service-account $SERVICE_ACCOUNT --cpu 2 --memory 4Gi --task-timeout 1h
 ```
 
 Os comandos de criação e IAM são necessários somente na primeira implantação. A conta de serviço recebe `roles/storage.objectUser` no bucket. O binding `allUsers` torna os objetos do bucket publicamente legíveis. A conta que implanta também precisa de permissão para anexar a conta de serviço ao job.
-O job está configurado com `allowIncomplete: true` para publicar registros mesmo quando faltam detalhes de local; os campos sem fonte ficam `null`.
+O job está configurado com `allowIncomplete: true` para publicar registros mesmo quando faltam detalhes de local; os campos sem fonte ficam `null`. Locais ambíguos também são registrados como pendências: nenhuma coordenada é escolhida arbitrariamente, os dados seguros da seção e os votos são preservados, e a distância permanece vazia quando falta uma coordenada. Com `allowIncomplete: false`, a ambiguidade continua bloqueando a publicação.
+
+A exportação do TSE pode incluir seções sem `NM_LOCAL_VOTACAO_FINAL` (como em 22/10/2026: 517.179 linhas, das quais 326 com destino informado). Essas linhas são excluídas da lista de alterações antes de montar os índices do cadastro e consultar os votos; as contagens ficam no log. Se nenhuma alteração com destino informado restar, a rotina falha e preserva o JSON anterior.
+
+Downloads HTTP(S) fazem até três tentativas em caso de timeout de conexão, handshake TLS ou leitura, com esperas de 2 e 4 segundos. Cada nova tentativa é registrada com a URL e o motivo; downloads parciais são removidos. A validação dos certificados continua habilitada, e erros de certificado ou respostas HTTP de erro não são repetidos. Se os timeouts persistirem, a execução falha sem publicar nem usar o cache antigo como fallback. Esse tratamento cobre a falha das 11h30 de 22/10/2026, quando o handshake HTTPS com `servicodados.ibge.gov.br` excedeu 120 segundos.
 
 Depois do deploy, execute manualmente para validar:
 
@@ -60,7 +64,17 @@ Depois do deploy, execute manualmente para validar:
 gcloud run jobs execute secoes-etl --region $REGION --wait
 ```
 
-A execução baixa arquivos oficiais grandes; aumente memória e tempo limite do job conforme necessário depois de observar o primeiro run. A execução manual substitui o JSON publicado, portanto só a faça quando quiser atualizar o dashboard.
+A execução baixa arquivos oficiais grandes. Em 22/10/2026, dois encerramentos com código 137 levaram a um teste com 8 GiB. A causa era a inclusão das linhas sem local final na exportação nacional: o processamento passou de centenas para mais de 500 mil seções. Após corrigir a seleção, o job `secoes-etl` em `comite-tecnologia/us-central1` voltou aos 4 GiB originais, mantendo 2 vCPUs. O filesystem gravável do Cloud Run também consome a memória do container; monitore o consumo ao mudar as fontes ou a imagem.
+
+A imagem `fix-national-export-20261022` foi construída a partir da fonte da imagem anterior de produção, preservando a descoberta automática no TSE e o arquivamento das quatro fontes. A execução `secoes-etl-t8q27` concluiu com código 0 e publicou 326 alterações às 11:06 de 22/10/2026 (Brasília), preservando os snapshots anteriores. A maior amostra de memória disponível foi de aproximadamente 0,57 GiB. Restaram quatro pendências de local final ausente no cadastro, publicadas com os campos de enriquecimento vazios conforme `allowIncomplete`.
+
+Para atualizar somente os recursos, sem substituir a imagem em produção:
+
+```powershell
+gcloud run jobs update secoes-etl --project=comite-tecnologia --region=us-central1 --cpu=2 --memory=4Gi
+```
+
+A execução manual acrescenta um snapshot ao histórico publicado, portanto só a faça quando quiser atualizar o dashboard.
 
 ## Agendamento
 
