@@ -3,6 +3,7 @@
 import csv
 import gzip
 import io
+import http.client
 import json
 import ssl
 from pathlib import Path
@@ -363,6 +364,71 @@ class PipelineTest(unittest.TestCase):
                     download("https://example.test/source.zip", self.root / "cache")
                 self.assertEqual(opened.call_count, 1)
                 sleep.assert_not_called()
+
+    def test_download_retries_truncation_with_fresh_digest_and_cleans_partial(self):
+        for protocol_error in (False, True):
+            with self.subTest(protocol_error=protocol_error):
+                cache = self.root / str(protocol_error)
+                partial = io.BytesIO(b"part")
+                partial.headers = {"Content-Length": "8"}
+                if protocol_error:
+                    partial.read = unittest.mock.Mock(
+                        side_effect=[b"part", http.client.IncompleteRead(b"", 4)])
+                complete = io.BytesIO(b"complete")
+                complete.headers = {"Content-Length": "8"}
+                with patch("scripts.gerar_dados.urllib.request.urlopen",
+                           side_effect=[partial, complete]) as opened, \
+                     patch("scripts.gerar_dados.time.sleep") as sleep, \
+                     self.assertLogs("gerar_dados", level="WARNING") as logs:
+                    path = download("https://example.test/source.zip", cache)
+                self.assertEqual(path.read_bytes(), b"complete")
+                self.assertEqual(opened.call_count, 2)
+                sleep.assert_called_once_with(2)
+                self.assertIn("Download incompleto", logs.output[0])
+                if not protocol_error:
+                    self.assertIn("esperado=8 bytes, recebido=4 bytes", logs.output[0])
+                version = source_version(path)
+                self.assertEqual(version["bytes"], 8)
+                self.assertEqual(version["sha256"], __import__("hashlib").sha256(b"complete").hexdigest())
+                self.assertEqual(set(cache.iterdir()), {path, path.with_name(path.name + ".meta.json")})
+
+    def test_download_truncation_exhaustion_preserves_cache_and_metadata(self):
+        cache = self.root / "cache"
+        source = "https://example.test/source.zip"
+        original = io.BytesIO(b"previous")
+        original.headers = {"Content-Length": "8"}
+        with patch("scripts.gerar_dados.urllib.request.urlopen", return_value=original):
+            path = download(source, cache)
+        metadata = path.with_name(path.name + ".meta.json")
+        previous_metadata = metadata.read_bytes()
+        responses = [io.BytesIO(b"part") for _ in range(3)]
+        for response in responses:
+            response.headers = {"Content-Length": "8"}
+        with patch("scripts.gerar_dados.urllib.request.urlopen", side_effect=responses) as opened, \
+             patch("scripts.gerar_dados.time.sleep") as sleep, \
+             self.assertLogs("gerar_dados", level="WARNING"):
+            with self.assertRaisesRegex(DataError, "esperado=8 bytes, recebido=4 bytes"):
+                download(source, cache, refresh=True)
+        self.assertEqual(opened.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [unittest.mock.call(2), unittest.mock.call(4)])
+        self.assertEqual(path.read_bytes(), b"previous")
+        self.assertEqual(metadata.read_bytes(), previous_metadata)
+        self.assertEqual(set(cache.iterdir()), {path, metadata})
+
+    def test_download_incomplete_read_exhaustion_reports_data_error(self):
+        responses = [io.BytesIO(b"") for _ in range(3)]
+        for response in responses:
+            response.headers = {}
+            response.read = unittest.mock.Mock(side_effect=http.client.IncompleteRead(b"part", 4))
+        cache = self.root / "cache"
+        with patch("scripts.gerar_dados.urllib.request.urlopen", side_effect=responses) as opened, \
+             patch("scripts.gerar_dados.time.sleep"), \
+             self.assertLogs("gerar_dados", level="WARNING"):
+            with self.assertRaisesRegex(DataError, "Download incompleto: https://example.test/source.zip") as caught:
+                download("https://example.test/source.zip", cache)
+        self.assertIsInstance(caught.exception.__cause__, http.client.IncompleteRead)
+        self.assertEqual(opened.call_count, 3)
+        self.assertFalse(list(cache.iterdir()))
 
     def test_results_turn_office_filter_and_duplicate_protection(self):
         counts = {"13":150, "22":100, "12":20, "95":5, "96":5}

@@ -66,6 +66,8 @@ A exportação do TSE pode incluir seções sem `NM_LOCAL_VOTACAO_FINAL` (como e
 
 Downloads HTTP(S) fazem até três tentativas em caso de timeout de conexão, handshake TLS ou leitura, com esperas de 2 e 4 segundos. Cada nova tentativa é registrada com a URL e o motivo; downloads parciais são removidos. A validação dos certificados continua habilitada, e erros de certificado ou respostas HTTP de erro não são repetidos. Se os timeouts persistirem, a execução falha sem publicar nem usar o cache antigo como fallback. Esse tratamento cobre a falha das 11h30 de 22/10/2026, quando o handshake HTTPS com `servicodados.ibge.gov.br` excedeu 120 segundos.
 
+O mesmo limite de três tentativas cobre transferências truncadas (`IncompleteRead`) e divergências entre o tamanho recebido e o `Content-Length`. Divergências registram os bytes esperados e recebidos. Cada tentativa reinicia o arquivo temporário e o SHA-256; nenhuma parte de um download anterior é reaproveitada. Se a terceira tentativa falhar, a execução encerra com erro, preservando o cache anterior e seus metadados e sem publicar um novo snapshot. A validação de tamanho não é relaxada.
+
 Depois do deploy, execute manualmente para validar:
 
 ```powershell

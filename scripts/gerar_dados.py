@@ -7,6 +7,7 @@ import argparse
 import csv
 import gzip
 import hashlib
+import http.client
 import io
 import json
 import logging
@@ -57,6 +58,10 @@ Section = tuple[str, str, int, int]
 
 class DataError(ValueError):
     """Fonte incompleta, ambígua ou incompatível com o contrato."""
+
+
+class IncompleteDownloadError(DataError):
+    """Transferência com tamanho diferente do anunciado pela fonte."""
 
 
 def normalize(value: str) -> str:
@@ -154,17 +159,24 @@ def download(source: str, cache: Path, refresh: bool = False) -> Path:
                         digest.update(chunk)
                         handle.write(chunk)
             if expected and temporary.stat().st_size != int(expected):
-                raise DataError(f"Download incompleto: {source}")
+                raise IncompleteDownloadError(
+                    f"Download incompleto: {source}; esperado={expected} bytes, "
+                    f"recebido={temporary.stat().st_size} bytes")
             version.update(sha256=digest.hexdigest(), bytes=temporary.stat().st_size)
             write_json(destination.with_name(destination.name + ".meta.json"), version)
             temporary.replace(destination)
             return destination
-        except (TimeoutError, urllib.error.URLError) as exc:
-            timed_out = isinstance(exc, TimeoutError) or isinstance(exc.reason, TimeoutError)
-            if not timed_out or attempt == 3:
+        except (TimeoutError, urllib.error.URLError, IncompleteDownloadError, http.client.IncompleteRead) as exc:
+            timed_out = isinstance(exc, TimeoutError) or (
+                isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, TimeoutError))
+            incomplete = isinstance(exc, (IncompleteDownloadError, http.client.IncompleteRead))
+            if not (timed_out or incomplete) or attempt == 3:
+                if isinstance(exc, http.client.IncompleteRead):
+                    raise IncompleteDownloadError(f"Download incompleto: {source}; {exc}") from exc
                 raise
             delay = 2 ** attempt
-            LOGGER.warning("Timeout no download de %s (tentativa %d/3): %s; nova tentativa em %ds",
+            LOGGER.warning("%s de %s (tentativa %d/3): %s; nova tentativa em %ds",
+                           "Timeout no download" if timed_out else "Download incompleto",
                            source, attempt, exc, delay)
         finally:
             if temporary is not None:
