@@ -15,7 +15,9 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -132,33 +134,43 @@ def download(source: str, cache: Path, refresh: bool = False) -> Path:
         LOGGER.info("Usando cache: %s", destination.name)
         return destination
     LOGGER.info("Baixando %s", source)
-    temporary: Path | None = None
-    try:
-        request = urllib.request.Request(source, headers={"User-Agent": "secoes-dashboard/1.0", "Accept-Encoding": "identity"})
-        digest = hashlib.sha256()
-        with urllib.request.urlopen(request, timeout=120) as response:
-            expected = response.headers.get("Content-Length")
-            # O TSE sobrescreve alguns ZIPs na mesma URL; Last-Modified/ETag/SHA-256 identificam a versão usada.
-            version = {
-                "url": source,
-                "last_modified": response.headers.get("Last-Modified"),
-                "etag": response.headers.get("ETag"),
-                "downloaded_at": datetime.now(timezone.utc).isoformat(),
-            }
-            with tempfile.NamedTemporaryFile(dir=cache, delete=False) as handle:
-                temporary = Path(handle.name)
-                for chunk in iter(lambda: response.read(1024*1024), b""):
-                    digest.update(chunk)
-                    handle.write(chunk)
-        if expected and temporary.stat().st_size != int(expected):
-            raise DataError(f"Download incompleto: {source}")
-        version.update(sha256=digest.hexdigest(), bytes=temporary.stat().st_size)
-        write_json(destination.with_name(destination.name + ".meta.json"), version)
-        temporary.replace(destination)
-        return destination
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    for attempt in range(1, 4):
+        temporary: Path | None = None
+        try:
+            request = urllib.request.Request(source, headers={"User-Agent": "secoes-dashboard/1.0", "Accept-Encoding": "identity"})
+            digest = hashlib.sha256()
+            with urllib.request.urlopen(request, timeout=120) as response:
+                expected = response.headers.get("Content-Length")
+                # O TSE sobrescreve alguns ZIPs na mesma URL; Last-Modified/ETag/SHA-256 identificam a versão usada.
+                version = {
+                    "url": source,
+                    "last_modified": response.headers.get("Last-Modified"),
+                    "etag": response.headers.get("ETag"),
+                    "downloaded_at": datetime.now(timezone.utc).isoformat(),
+                }
+                with tempfile.NamedTemporaryFile(dir=cache, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    for chunk in iter(lambda: response.read(1024*1024), b""):
+                        digest.update(chunk)
+                        handle.write(chunk)
+            if expected and temporary.stat().st_size != int(expected):
+                raise DataError(f"Download incompleto: {source}")
+            version.update(sha256=digest.hexdigest(), bytes=temporary.stat().st_size)
+            write_json(destination.with_name(destination.name + ".meta.json"), version)
+            temporary.replace(destination)
+            return destination
+        except (TimeoutError, urllib.error.URLError) as exc:
+            timed_out = isinstance(exc, TimeoutError) or isinstance(exc.reason, TimeoutError)
+            if not timed_out or attempt == 3:
+                raise
+            delay = 2 ** attempt
+            LOGGER.warning("Timeout no download de %s (tentativa %d/3): %s; nova tentativa em %ds",
+                           source, attempt, exc, delay)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        time.sleep(delay)
+    raise AssertionError("Download terminou sem resultado")
 
 
 @contextmanager
@@ -205,14 +217,21 @@ def iter_csv(path: Path, required: set[str], encoding: str = "cp1252", ufs: set[
 
 def load_changes(path: Path, encoding: str, year: int) -> dict[Section, dict[str, str]]:
     changes: dict[Section, dict[str, str]] = {}
+    without_destination = 0
     for row in iter_csv(path, CHANGES, encoding):
         if integer(row["AA_ELEICAO"], "AA_ELEICAO") != year:
+            continue
+        if not row["NM_LOCAL_VOTACAO_FINAL"].strip():
+            without_destination += 1
             continue
         k = key(row, True)
         if k in changes:
             raise DataError(f"Seção duplicada na lista de alterações: {k}")
         integer(row["QT_ELEITORES"], "QT_ELEITORES")
         changes[k] = row
+    if without_destination:
+        LOGGER.info("Fonte TSE: %d seções sem local final excluídas; %d alterações com destino informado",
+                    without_destination, len(changes))
     if not changes:
         raise DataError("Nenhuma seção alterada encontrada para o ano configurado")
     return changes
@@ -286,12 +305,16 @@ def load_registry(path: Path, changes: dict[Section, dict[str, str]], encoding: 
     return sections, locations, names, dict(places)
 
 
-def find_location(candidates: list[dict[str, str]], label: str) -> dict[str, str] | None:
+def find_location(candidates: list[dict[str, str]], label: str, issues: list[str] | None = None) -> dict[str, str] | None:
     if not candidates:
         return None
     signatures = {(r["NR_LOCAL_VOTACAO"], r["DS_ENDERECO"], point(r)) for r in candidates}
     if len(signatures) > 1:
-        raise DataError(f"Local ambíguo no cadastro: {label}; não é seguro escolher pelas coordenadas")
+        message = f"Local ambíguo no cadastro: {label}; não é seguro escolher pelas coordenadas"
+        if issues is None:
+            raise DataError(message)
+        issues.append(message)
+        return None
     return candidates[0]
 
 
@@ -383,7 +406,7 @@ def resolve_final_from_original(registry: dict[str, str], k: Section, places: di
     return found
 
 
-def build_rows(changes, sections, locations, names, ibge, results, distances, places=None):
+def build_rows(changes, sections, locations, names, ibge, results, distances, places=None, *, allow_incomplete=False):
     places = places or {}
     output: list[dict[str, Any]] = []
     issues: list[str] = []
@@ -411,13 +434,13 @@ def build_rows(changes, sections, locations, names, ibge, results, distances, pl
             output.append(row)
             continue
         final_candidates = locations.get((*k[:3], normalize(row["local_2t"])), [])
-        final = registry if normalize(registry["NM_LOCAL_VOTACAO"]) == normalize(row["local_2t"]) else find_location(final_candidates, str(named)+" final")
+        final = registry if normalize(registry["NM_LOCAL_VOTACAO"]) == normalize(row["local_2t"]) else find_location(final_candidates, str(named)+" final", issues if allow_incomplete else None)
         original_id = registry["NR_LOCAL_VOTACAO_ORIGINAL"]
         old_candidates = locations.get((*k[:3], normalize(row["local_1t"])), [])
         if original_id.isdigit() and normalize(registry["NM_LOCAL_VOTACAO_ORIGINAL"]) == normalize(row["local_1t"]):
             old_candidates = [r for r in old_candidates if r["NR_LOCAL_VOTACAO"] == original_id]
             row["endereco_1t"] = registry["DS_ENDERECO_LOCVT_ORIGINAL"]
-        old = find_location(old_candidates, str(named)+" inicial")
+        old = find_location(old_candidates, str(named)+" inicial", issues if allow_incomplete else None)
         if old:
             row["endereco_1t"] = old["DS_ENDERECO"]
         final_id: str | None = None
@@ -532,7 +555,7 @@ def main(argv: list[str] | None = None) -> int:
         if lula == flavio or any(not 1 <= int(n) <= 94 for n in [lula, flavio]):
             raise DataError("Números dos candidatos devem ser diferentes e estar entre 1 e 94")
         results = load_results(source("votes"), source("details"), wanted, encoding, year, lula, flavio)
-        rows, issues = build_rows(changes, sections, locations, names, ibge, results, distances, places)
+        rows, issues = build_rows(changes, sections, locations, names, ibge, results, distances, places, allow_incomplete=allow_incomplete)
         generated_at = datetime.now(timezone.utc)
         source_versions = {name: {"source": sources[name], **source_version(path)} for name, path in source_paths.items()}
         report = {
