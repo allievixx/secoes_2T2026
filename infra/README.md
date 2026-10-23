@@ -1,36 +1,43 @@
 # Infraestrutura da rotina de dados (GCP)
 
-A rotina (`scripts/gerar_dados.py`) roda como Cloud Run Job no projeto `thech-against-bozo` e publica o JSON
-num bucket do Cloud Storage do mesmo projeto, como já fazia antes. O front continua no GitHub Pages.
+## Produção
+
+A rotina (`scripts/gerar_dados.py`) roda como Cloud Run Job no projeto `comite-tecnologia`. O front continua no
+GitHub Pages (`.github/workflows/pages.yml`).
 
 ```
-Cloud Scheduler (06:30, 11:30, 15:30, 20:30, America/Sao_Paulo; nasce pausado)
-  └─> Cloud Run Job "secoes" (1 vCPU, 2 GiB, até 1 h)
-        └─> gs://secoes-comite-popular-tech/secoes_alteradas_2t_2026.json e fontes/
-              (leitura pública, CORS de storage-cors.json)
+Cloud Scheduler "secoes-etl-4x-daily" (06:30, 11:30, 15:30, 20:30, America/Sao_Paulo)
+  └─> Cloud Run Job "secoes-etl" (us-central1, 2 vCPU, 4 GiB, até 1 h, SA secoes-etl@)
+        └─> gs://extracao_alteracao_locais_votacao/secoes_alteradas_2t_2026.json e fontes/
 ```
 
-| Onde | O que | Quem aplica |
-| --- | --- | --- |
-| `infra/terraform/` | bucket, Artifact Registry, Job, Scheduler, contas e o provider de WIF | à mão, dono do projeto |
-| `.github/workflows/deploy.yml` | build da imagem, troca da imagem do Job e uma execução | à mão (workflow_dispatch) |
-| `.github/workflows/rodar-rotina.yml` | uma execução do Job com a imagem atual, fora do agendamento | à mão (workflow_dispatch) |
+Esses recursos foram criados à mão e não estão no Terraform deste repositório.
+
+## Deploy (só manual)
+
+Não há deploy pelo GitHub Actions. O deploy sai sempre de um commit da `main`, empacotado com `git archive`: assim a
+imagem tem exatamente o que está no git, sem arquivos locais soltos. A tag da imagem é o SHA do commit.
+
+```bash
+git fetch origin && git switch --detach origin/main      # ou o commit a publicar / voltar atrás
+SHA=$(git rev-parse --short HEAD)
+IMAGEM=us-central1-docker.pkg.dev/comite-tecnologia/secoes/secoes-etl:$SHA
+git archive --format=tar.gz -o /tmp/secoes-$SHA.tgz HEAD
+gcloud builds submit /tmp/secoes-$SHA.tgz --tag "$IMAGEM" --project=comite-tecnologia
+gcloud run jobs update secoes-etl --image="$IMAGEM" --region=us-central1 --project=comite-tecnologia
+gcloud run jobs execute secoes-etl --region=us-central1 --project=comite-tecnologia --wait   # opcional: roda agora
+```
+
+Para rodar a rotina fora do agendamento, com a imagem atual, use só o último comando.
+
+## Terraform (`infra/terraform/`)
+
+O Terraform daqui descreve uma instalação anterior no projeto `thech-against-bozo` (Job `secoes`, bucket
+`secoes-comite-popular-tech`, Scheduler, conta `secoes-deployer` e provider de WIF), **não** a produção acima.
+Ele é aplicado à mão, por quem é dono daquele projeto: `terraform plan` e `apply`.
 
 Por que a raiz não roda no CI: os módulos do `iac-shared` e o `terraform.yml` do `pipelines-compartilhados` são
-privados, e este repositório é público. O Actions daqui só usa a conta de deploy, que não mexe em IAM.
-
-## Primeira vez
-
-1. `terraform -chdir=infra/terraform init && terraform -chdir=infra/terraform apply -var agendar=false`. O Job nasce
-   com uma imagem pública de exemplo e o Scheduler nasce pausado.
-2. Rode o workflow *Deploy da rotina* na `main`: ele publica a imagem, troca a do Job e roda a rotina uma vez.
-3. Quando a rotina gerar a lista atual do TSE, ligue o agendamento: `apply` (o padrão de `agendar` é `true`).
-
-## Depois
-
-- Código da rotina mudou: rode o *Deploy da rotina* (vazio = topo da `main`; um commit antigo volta atrás).
-- Precisa dos dados antes do próximo agendamento: rode o *Rodar a rotina agora* na `main`.
-- Infra mudou: `terraform plan` e `apply` à mão, por quem é dono do projeto.
+privados, e este repositório é público.
 
 ## Logs no Grafana Cloud (Loki)
 
