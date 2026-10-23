@@ -30,6 +30,12 @@ class RunJobTest(unittest.TestCase):
         self.assertIn('ARG:/dev/stderr', result.stdout)
         self.assertIn('ARG:python', result.stdout)
 
+    def test_wrapper_does_not_dump_tracebacks_periodically(self):
+        # O dump periódico lê a pilha da thread principal fora do GIL e já derrubou a rotina com SIGSEGV.
+        wrapper = (ROOT / 'scripts/run_job.sh').read_text()
+        self.assertIn('faulthandler.enable()', wrapper)
+        self.assertNotIn('dump_traceback_later', wrapper)
+
 
 if __name__ == '__main__':
     unittest.main()

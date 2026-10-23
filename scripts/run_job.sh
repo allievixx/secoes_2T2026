@@ -11,7 +11,6 @@ import runpy
 import sys
 print("BOOT: Xvfb iniciado; Python ativo; importando pipeline", flush=True)
 faulthandler.enable()
-faulthandler.dump_traceback_later(120, repeat=True)
 sys.argv = ["scripts.gerar_dados", *sys.argv[1:]]
 runpy.run_module("scripts.gerar_dados", run_name="__main__")
 ' "$@"
