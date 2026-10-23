@@ -3,6 +3,9 @@
 *{box-sizing:border-box}[hidden]{display:none!important}html,body{overflow-x:clip}html{scroll-padding-top:84px}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--f-ui);font-size:15px;line-height:1.45;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px 32px}
 .bar{background:#C3090A;color:#fff;margin-inline:calc(-1 * max(16px,env(safe-area-inset-left,0px)));margin-top:-16px;margin-bottom:16px;position:sticky;top:0;z-index:20}
+/* A barra do Comitê (barra.js) entra como primeiro filho do body: encosta nas bordas como o .bar, que vem logo abaixo dela */
+#barra-comite-popular-tech{margin-inline:calc(-1 * max(16px,env(safe-area-inset-left,0px)));margin-top:-16px}
+#barra-comite-popular-tech+.bar{margin-top:0}
 .bar-in{max-width:1100px;margin:0 auto;display:flex;align-items:stretch;gap:24px;padding:0 max(20px,env(safe-area-inset-left,0px));min-height:72px;font-family:"Montserrat","Public Sans",system-ui,sans-serif}
 .logo{display:flex;flex-direction:column;justify-content:center;color:#fff;text-decoration:none;font-weight:900;font-size:1.2rem;line-height:.9;text-transform:uppercase;flex:0 0 auto}.logo span:last-child{font-size:.62em;letter-spacing:.06em}
 .nav{display:flex;align-items:stretch;gap:4px;overflow-x:auto;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}
