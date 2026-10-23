@@ -10,6 +10,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
+from uuid import uuid4
 
 INTEGER_FIELDS = {
     "cd_ibge", "zona", "secao", "eleitores", "aptos_1t", "abstencao_1t",
@@ -39,9 +40,9 @@ def public_url(bucket_name: str, object_name: str) -> str:
 
 
 def archive_sources(config: dict[str, Any]) -> tuple[str, list[str]]:
-    """Prefixo e nomes das fontes cujas cópias são guardadas no bucket; por padrão só a lista de alterações."""
+    """Prefixo e fontes arquivadas em cada execução; por padrão todos os arquivos do TSE."""
     prefix = str(config.get("archivePrefix", "fontes")).strip("/")
-    names = config.get("archiveSources", ["changes"])
+    names = config.get("archiveSources", ["changes", "registry", "votes", "details"])
     if not prefix or not isinstance(names, list) or any(not isinstance(n, str) or not n for n in names):
         raise StorageError("archivePrefix deve ser um texto e archiveSources uma lista de nomes de fontes")
     return prefix, names
@@ -60,7 +61,7 @@ def _version_stamp(version: dict[str, Any]) -> str:
 
 
 def archive_source(path: Path, name: str, version: dict[str, Any], config: dict[str, Any]) -> str:
-    """Guarda uma cópia do arquivo-fonte no bucket, uma por versão (SHA-256); devolve o caminho gs://-relativo."""
+    """Sempre grava uma nova cópia, mesmo com SHA-256 idêntico; devolve o caminho gs://-relativo."""
     bucket_name, _ = target(config)
     prefix, _ = archive_sources(config)
     sha256 = str(version.get("sha256") or "")
@@ -68,7 +69,9 @@ def archive_source(path: Path, name: str, version: dict[str, Any], config: dict[
         raise StorageError(f"Fonte {name} sem SHA-256; cópia não arquivada")
     folder = f"{prefix}/{name}/"
     basename = Path(urlparse(str(version.get("url") or "")).path).name or path.name
-    object_name = f"{folder}{_version_stamp(version)}-{sha256[:12]}-{basename}"
+    archived_at = datetime.now(timezone.utc)
+    copy_id = f"{archived_at.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex}"
+    object_name = f"{folder}{copy_id}-{_version_stamp(version)}-{sha256[:12]}-{basename}"
 
     try:
         from google.auth.exceptions import GoogleAuthError
@@ -79,14 +82,11 @@ def archive_source(path: Path, name: str, version: dict[str, Any], config: dict[
 
     try:
         bucket = storage.Client().bucket(bucket_name)
-        # Mesma versão já guardada (talvez com outro carimbo de data): não duplica.
-        for blob in bucket.list_blobs(prefix=folder):
-            if (blob.metadata or {}).get("sha256") == sha256:
-                return f"{bucket_name}/{blob.name}"
         blob = bucket.blob(object_name)
         blob.metadata = {k: str(v) for k, v in {
             "sha256": sha256, "source_url": version.get("url"), "last_modified": version.get("last_modified"),
             "etag": version.get("etag"), "downloaded_at": version.get("downloaded_at"),
+            "archived_at": archived_at.isoformat(),
         }.items() if v}
         blob.cache_control = "public, max-age=31536000, immutable"
         blob.upload_from_filename(str(path), content_type=CONTENT_TYPES.get(Path(basename).suffix.lower(), "application/octet-stream"),
@@ -149,20 +149,51 @@ def publish_json(
 
     try:
         from google.auth.exceptions import GoogleAuthError
-        from google.api_core.exceptions import GoogleAPIError
+        from google.api_core.exceptions import GoogleAPIError, PreconditionFailed
         from google.cloud import storage
     except ImportError as exc:
         raise StorageError("Dependência google-cloud-storage não instalada") from exc
 
     object_path = f"{bucket_name}/{object_name}"
+    bucket = storage.Client().bucket(bucket_name)
+    current: dict[str, Any] = {
+        "extracted_at": extracted_at.astimezone(timezone.utc).isoformat(),
+        "rows": [typed_row(row, fields) for row in rows],
+    }
+    if source_versions:
+        current["sources"] = source_versions
+    # Releitura + merge após concorrência: nunca reenviar um histórico obsoleto.
+    for attempt in range(5):
+        try:
+            _append_snapshot(bucket.blob(object_name), current, fields)
+            return object_path
+        except PreconditionFailed as exc:
+            if attempt == 4:
+                raise StorageError(f"Conflitos concorrentes ao publicar gs://{object_path}; histórico preservado") from exc
+        except (GoogleAPIError, GoogleAuthError) as exc:
+            raise StorageError(f"Falha ao publicar gs://{object_path}: {exc}") from exc
+    raise StorageError(f"Publicação não concluída: gs://{object_path}")
+
+
+def _snapshot_time(snapshot: dict[str, Any]) -> datetime:
     try:
-        blob = storage.Client().bucket(bucket_name).blob(object_name)
+        instant = datetime.fromisoformat(snapshot["extracted_at"].replace("Z", "+00:00"))
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise StorageError("Data inválida no histórico publicado; publicação cancelada") from exc
+    if instant.utcoffset() is None:
+        raise StorageError("Data sem fuso no histórico publicado; publicação cancelada")
+    return instant.astimezone(timezone.utc)
+
+
+def _append_snapshot(blob: Any, current: dict[str, Any], fields: list[str]) -> None:
+    """Acrescenta atomicamente sem reprocessar ou substituir extrações anteriores."""
+    try:
         snapshots = []
         generation = 0
         if blob.exists():
             blob.reload()
             generation = blob.generation
-            previous = json.loads(blob.download_as_text())
+            previous = json.loads(blob.download_as_text(if_generation_match=generation))
             if isinstance(previous, dict) and isinstance(previous.get("snapshots"), list):
                 snapshots = previous["snapshots"]
                 for snapshot in snapshots:
@@ -171,14 +202,7 @@ def publish_json(
                         or not isinstance(snapshot.get("rows"), list)
                         or not snapshot["rows"]):
                         raise StorageError("Histórico publicado inválido; publicação cancelada para preservar os dados")
-                    try:
-                        old_extracted_at = datetime.fromisoformat(snapshot["extracted_at"].replace("Z", "+00:00"))
-                    except ValueError as exc:
-                        raise StorageError("Data inválida no histórico publicado; publicação cancelada") from exc
-                    if old_extracted_at.utcoffset() is None:
-                        raise StorageError("Data sem fuso no histórico publicado; publicação cancelada")
-                    snapshot["extracted_at"] = old_extracted_at.astimezone(timezone.utc).isoformat()
-                    snapshot["rows"] = [typed_row(row, fields) for row in snapshot["rows"]]
+                    _snapshot_time(snapshot)
             elif isinstance(previous, dict) and isinstance(previous.get("rows"), list):
                 old_extracted_at = blob.updated
                 if old_extracted_at is None:
@@ -191,16 +215,13 @@ def publish_json(
                 }]
             else:
                 raise StorageError("Formato JSON publicado inválido; publicação cancelada para preservar os dados")
-        current: dict[str, Any] = {
-            "extracted_at": extracted_at.astimezone(timezone.utc).isoformat(),
-            "rows": [typed_row(row, fields) for row in rows],
-        }
-        # Versão exata de cada fonte (Last-Modified/ETag/SHA-256): o TSE republica ZIPs na mesma URL.
-        if source_versions:
-            current["sources"] = source_versions
-        snapshots = [snapshot for snapshot in snapshots if snapshot["extracted_at"] != current["extracted_at"]]
+        for snapshot in snapshots:
+            if _snapshot_time(snapshot) == _snapshot_time(current):
+                if snapshot["rows"] == current["rows"] and snapshot.get("sources") == current.get("sources"):
+                    return  # Retry de uma publicação já concluída: não duplica.
+                raise StorageError("Extrações diferentes no mesmo instante; histórico não foi substituído")
         snapshots.append(current)
-        snapshots.sort(key=lambda snapshot: snapshot["extracted_at"])
+        snapshots.sort(key=_snapshot_time)
         payload = json.dumps(
             {"snapshots": snapshots},
             ensure_ascii=False,
@@ -214,6 +235,5 @@ def publish_json(
             checksum="crc32c",
             if_generation_match=generation,
         )
-    except (GoogleAPIError, GoogleAuthError) as exc:
-        raise StorageError(f"Falha ao publicar gs://{object_path}: {exc}") from exc
-    return object_path
+    except json.JSONDecodeError as exc:
+        raise StorageError("JSON publicado inválido; publicação cancelada para preservar o histórico") from exc

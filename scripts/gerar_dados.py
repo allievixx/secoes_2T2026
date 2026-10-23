@@ -29,9 +29,11 @@ from pathlib import Path
 from typing import Any, Iterator
 
 if __package__:
+    from .tse_source import discover_changes
     from .loki_logger import setup_loki_logging
     from .storage_io import StorageError, archive_source, archive_sources, public_url, publish_json, target as storage_target
 else:
+    from tse_source import discover_changes
     from loki_logger import setup_loki_logging
     from storage_io import StorageError, archive_source, archive_sources, public_url, publish_json, target as storage_target
 
@@ -531,7 +533,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inspect", action="store_true", help="Baixar somente alterações e informar cabeçalho/contagens, sem gerar saída")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    LOGGER.info("BOOT: pipeline iniciado; configurando logging adicional")
     loki_handler = setup_loki_logging()
+    LOGGER.info("BOOT: logging configurado; lendo configuração")
     try:
         config = json.loads(args.config.read_text(encoding="utf-8"))
         configured_allow_incomplete = config.get("allowIncomplete", False)
@@ -542,7 +546,12 @@ def main(argv: list[str] | None = None) -> int:
             storage_target(config.get("storage", {}))
             archive_sources(config.get("storage", {}))
         base, encoding, year = args.config.resolve().parent, config.get("encoding", "cp1252"), int(config.get("year", 2026))
-        sources = config["sources"]
+        sources = dict(config["sources"])
+        discovery = None
+        if config.get("changesPage"):
+            discovery = discover_changes(config["changesPage"], year)
+            sources["changes"] = discovery["url"]
+            LOGGER.info("Fonte vigente descoberta no TSE: %s (%s)", sources["changes"], discovery["page_updated"])
         source_paths: dict[str, Path] = {}
         def source(name: str) -> Path:
             source_paths[name] = download(resolve_source(sources[name], base), args.cache_dir, args.refresh)
@@ -570,6 +579,8 @@ def main(argv: list[str] | None = None) -> int:
         rows, issues = build_rows(changes, sections, locations, names, ibge, results, distances, places, allow_incomplete=allow_incomplete)
         generated_at = datetime.now(timezone.utc)
         source_versions = {name: {"source": sources[name], **source_version(path)} for name, path in source_paths.items()}
+        if discovery:
+            source_versions["changes"].update(discovery)
         report = {
             "generated_at":generated_at.isoformat(),
             "year":year, "sources":sources, "source_versions":source_versions, "candidates":candidates,
@@ -589,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
             raise DataError(f"{len(issues)} pendências; saída preservada. Consulte {args.report}")
         if args.destination in {"storage", "both"}:
             storage_config = config.get("storage", {})
-            # Cópia da fonte bruta por versão: o TSE sobrescreve a URL, e sem isso a versão usada se perde.
+            # Nova cópia de cada fonte a cada execução, mesmo quando o conteúdo não mudou.
             _, archive_names = archive_sources(storage_config)
             for name in archive_names:
                 if name not in source_paths:

@@ -453,7 +453,7 @@ class PipelineTest(unittest.TestCase):
         (self.root / "ibge.json").write_text(json.dumps(municipalities()), encoding="utf-8")
         self.source("long.csv", [{"UF":"AL", "CD_MUNICIPIO":"27596", "ZONA":"20", "NR_LOCAL_VOTACAO":"20", "DISTANCIA_MEDIA_KM":"5"}])
         config = self.root / "config.json"
-        config.write_text(json.dumps({"storage":{"bucket":"test-bucket","object":"snapshot.json","archiveSources":["changes"]},"sources":{
+        config.write_text(json.dumps({"storage":{"bucket":"test-bucket","object":"snapshot.json"},"sources":{
             "changes":"changes.zip", "registry":"registry.zip", "votes":"votes.zip", "details":"details.zip",
             "municipalities":"ibge.json", "longDistance":"long.csv",
         }}), encoding="utf-8")
@@ -485,13 +485,15 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(saved_report["destination"],"storage")
             self.assertEqual(saved_report["storage_object"],"test-bucket/snapshot.json")
             self.assertEqual(saved_report["dashboard_data_url"],"https://storage.googleapis.com/test-bucket/snapshot.json")
-            # Só a lista de alterações é arquivada por padrão; o caminho vai para o snapshot e para o relatório.
-            self.assertEqual(mocked_archive.call_count,1)
-            self.assertEqual(mocked_archive.call_args.args[1],"changes")
+            # Todas as fontes do TSE são arquivadas; IBGE não faz parte dessa lista.
+            self.assertEqual(mocked_archive.call_count,4)
+            self.assertEqual([call.args[1] for call in mocked_archive.call_args_list],
+                             ["changes", "registry", "votes", "details"])
             self.assertEqual(len(mocked_archive.call_args.args[2]["sha256"]),64)
             self.assertEqual(saved_report["source_versions"]["changes"]["archived"],"test-bucket/fontes/changes/20261019T141223Z-abc-changes.zip")
             self.assertEqual(mocked_json.call_args.args[4]["changes"]["archived"],saved_report["source_versions"]["changes"]["archived"])
-            self.assertNotIn("archived",saved_report["source_versions"]["registry"])
+            self.assertIn("archived",saved_report["source_versions"]["registry"])
+            self.assertNotIn("archived",saved_report["source_versions"]["municipalities"])
 
         # Falha ao arquivar não impede a publicação do dashboard, mas fica no relatório.
         with patch("scripts.gerar_dados.publish_json",return_value="test-bucket/snapshot.json") as mocked_json, \
@@ -499,7 +501,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(main(["--config",str(config),"--report",str(report)]),0)
             self.assertEqual(mocked_json.call_count,1)
             saved_report = json.loads(report.read_text(encoding="utf-8"))
-            self.assertEqual(saved_report["falhas_arquivamento"],["sem permissao no bucket"])
+            self.assertEqual(saved_report["falhas_arquivamento"],["sem permissao no bucket"] * 4)
             self.assertTrue(saved_report["publicado"])
 
         content["allowIncomplete"] = True
