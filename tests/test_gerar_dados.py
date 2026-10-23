@@ -453,7 +453,7 @@ class PipelineTest(unittest.TestCase):
         (self.root / "ibge.json").write_text(json.dumps(municipalities()), encoding="utf-8")
         self.source("long.csv", [{"UF":"AL", "CD_MUNICIPIO":"27596", "ZONA":"20", "NR_LOCAL_VOTACAO":"20", "DISTANCIA_MEDIA_KM":"5"}])
         config = self.root / "config.json"
-        config.write_text(json.dumps({"storage":{"bucket":"test-bucket","object":"snapshot.json","archiveSources":["changes"]},"sources":{
+        config.write_text(json.dumps({"storage":{"bucket":"test-bucket","object":"snapshot.json"},"sources":{
             "changes":"changes.zip", "registry":"registry.zip", "votes":"votes.zip", "details":"details.zip",
             "municipalities":"ibge.json", "longDistance":"long.csv",
         }}), encoding="utf-8")
